@@ -10,13 +10,16 @@ The map screen shows relationships as suggested routes rather than hard prerequi
 
 ## Backend slice now working
 
-`backend/app` provides a FastAPI modular-monolith boundary with SQLite persistence. It resolves topic scopes, runs a synchronous graph job, returns seven concepts with typed edges, records structural validation and trust metadata, and exposes generated OpenAPI docs. The deterministic provider is intentionally labeled `limited_unverified`; it does not fabricate source support.
+`backend/app` now provides a FastAPI modular-monolith boundary with PostgreSQL selected by `DATABASE_URL` in deployed environments and a SQLite local/test fallback. Versioned Alembic migrations preserve the existing graph, session, action, lesson, event, and learner-graph data. The deterministic graph/teaching provider remains intentionally labeled `limited_unverified`; it does not fabricate source support.
+
+The backend now exposes camelCase learner-state contracts for activity events, evidence admission and supersession, canonical concept state, review queues, nested branches, and anchored versioned notes. Reading a lesson records activity only. Canonical state changes only from accepted evidence through the versioned learner-state reducer. The web UI has not yet connected these routes and still uses browser storage for its visible state.
 
 ## Next engineering slice
 
 1. Add a model-provider abstraction with routing, structured outputs, citations, and verifier/critic steps.
 2. Generate arbitrary-topic graphs with provenance, confidence, prerequisite closure, and review gates.
-4. Persist learner state, curriculum state, events, evidence, notes, and branches in PostgreSQL.
-5. Add assessment blueprints, item-family generation, similarity guards, solver validation, and knowledge tracing.
+3. Connect the existing workspace to durable sessions, learner state, branches, notes, and review queues.
+4. Add assessment blueprints, item-family generation, similarity guards, solver validation, and calibrated knowledge tracing through the evidence-admission boundary.
+5. Replace development learner headers with real authentication-derived ownership before hosted multi-user use.
 
 The current UI is intentionally ready to connect to those contracts without pretending those services already exist.
