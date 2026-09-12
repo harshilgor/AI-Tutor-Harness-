@@ -44,7 +44,7 @@ def test_migrations_upgrade_legacy_sqlite_without_erasing_history(tmp_path):
     with store.engine.connect() as migrated:
         revision = migrated.execute(text("SELECT version_num FROM alembic_version")).scalar_one()
         position = migrated.execute(text("SELECT learner_id, state_version FROM learning_sessions WHERE id='session_legacy'")).mappings().one()
-    assert revision == "0003_durable_session_position"
+    assert revision == "0004_teaching_policy"
     assert dict(position) == {"learner_id": "local", "state_version": 3}
     store.close()
 
@@ -58,3 +58,27 @@ def test_deployed_environment_requires_postgresql(monkeypatch):
         assert "PostgreSQL" in str(exc)
     else:
         raise AssertionError("Production mode accepted a non-PostgreSQL database")
+
+
+def test_migrations_preserve_existing_policy_history(tmp_path):
+    path = tmp_path / "legacy-policy.db"
+    with sqlite3.connect(path) as connection:
+        connection.executescript("""
+            CREATE TABLE teaching_plans (
+                id TEXT PRIMARY KEY, action_id TEXT NOT NULL UNIQUE, payload TEXT NOT NULL
+            );
+            CREATE TABLE policy_validation_results (
+                id TEXT PRIMARY KEY, action_id TEXT NOT NULL UNIQUE,
+                plan_id TEXT NOT NULL UNIQUE, payload TEXT NOT NULL
+            );
+            INSERT INTO teaching_plans VALUES ('plan_legacy', 'run_legacy', '{"legacy":true}');
+            INSERT INTO policy_validation_results VALUES ('validation_legacy', 'run_legacy', 'plan_legacy', '{"accepted":true}');
+        """)
+    store = Store(path)
+    store.close()
+    # Starting again must leave the adopted records intact as well.
+    store = Store(path)
+    with store.engine.connect() as connection:
+        assert connection.execute(text("SELECT payload FROM teaching_plans")).scalar_one() == '{"legacy":true}'
+        assert connection.execute(text("SELECT payload FROM policy_validation_results")).scalar_one() == '{"accepted":true}'
+    store.close()

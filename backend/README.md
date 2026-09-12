@@ -60,7 +60,7 @@ changing the HTTP contract. `Idempotency-Key` is accepted at the boundary and
 will become the deduplication key when retries and authenticated sessions are
 added.
 
-## Learning-kernel teaching flow
+## Production Learning Kernel
 
 The first ChatGPT-style action path is now functional with the same
 provider-neutral boundary:
@@ -78,19 +78,42 @@ GET  /v1/actions/{runId}/events   (text/event-stream)
 GET  /v1/lessons/{lessonId}
 ```
 
-The action persists a session position, classifies free-form intent, assembles
-the selected graph concept, applies Teaching Gear, creates a typed lesson
-artifact, and emits replayable events (`action.started`, `intent.classified`,
-`context.ready`, `plan.created`, `artifact.created`,
-`verification.completed`, and `lesson.completed`). JSON uses camelCase for the
-web client while the storage adapter keeps the records versionable.
+The action assembles a typed `ActionContext` from the selected graph, target
+objective, current session position, Teaching Gear, learner projection, and
+request intent. It traverses only incoming `requires` edges, with explicit
+cycle, missing-node, unsupported-edge, depth, and node-budget outcomes. The
+resulting `TeachingPlan` is persisted before generation and includes its
+prerequisite classification, strategy, representation sequence, concepts to
+avoid, intended next action, and policy/version metadata.
+
+The response adds `actionContext`, `teachingPlan`, and `policyValidation` while
+preserving the existing run and lesson fields. A plan can also be inspected at
+`GET /v1/teaching-plans/{planId}`. Actions emit replayable events
+(`action.started`, `intent.classified`, `context.ready`, `plan.created`,
+`plan.validated`, `artifact.created`, `verification.completed`, and
+`lesson.completed`). JSON remains camelCase for the web client.
+
+Quick, Guided, and Deep compile to different policy dimensions and
+representation sequences, not token targets. Simplify, Why, Example, Visualize,
+Resume, and Check Understanding are typed local overrides. Deep + Simplify, for
+example, keeps mechanistic depth and derivation while lowering abstraction and
+step size. Visualize is bounded to a labeled relationship representation with a
+text equivalent; it is not an arbitrary simulation renderer.
 
 The current local provider is deliberately called
 `deterministic_baseline`. Its lesson is a qualified instructional scaffold
 with `insufficient` trust and a source-review note. It does not claim to have
-answered arbitrary domain questions or update mastery. A model and retrieval
-provider can replace `learning_kernel.build_lesson` behind this same action
-contract once a server-side API key and source policy are configured.
+answered arbitrary domain questions or update mastery. Policy validation
+explicitly records that it did **not** establish source-backed correctness,
+model verification, or calibrated mastery. Opening or generating a lesson
+creates no learner evidence and does not mutate the learner projection. Failed
+actions do not advance session position. An idempotency-key retry returns the
+already committed run, plan, lesson, and events rather than duplicating them.
+
+A model and retrieval provider can later replace lesson rendering behind the
+same policy and action contracts. This slice intentionally adds no retrieval
+provider, broad assessment engine, flashcards, or complete learner-state
+estimator.
 
 No API key is required for the current slice. A provider key becomes necessary
 when the deterministic baseline is replaced with source retrieval and model

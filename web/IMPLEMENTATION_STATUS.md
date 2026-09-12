@@ -14,12 +14,17 @@ The map screen shows relationships as suggested routes rather than hard prerequi
 
 The backend now exposes camelCase learner-state contracts for activity events, evidence admission and supersession, canonical concept state, review queues, nested branches, and anchored versioned notes. Reading a lesson records activity only. Canonical state changes only from accepted evidence through the versioned learner-state reducer. The web UI has not yet connected these routes and still uses browser storage for its visible state.
 
+The Production Learning Kernel is now implemented behind the existing teaching-action endpoint. Each action exposes a typed context, persisted teaching plan, and deterministic policy-validation result. Prerequisite traversal uses only `requires` edges and stops clearly on missing nodes, cycles, unsupported relationships, or traversal budgets. Quick, Guided, and Deep select distinct pedagogical sequences; contextual controls compile into local typed overrides. Existing lesson fields remain intact, so the UI does not need to parse lesson prose to understand policy decisions.
+
+The deterministic provider remains `limited_unverified` and makes no claim of source-backed correctness, model verification, evidence, or calibrated mastery. Lesson reading does not advance the learner projection, failed actions do not advance lesson position, and idempotent retries do not duplicate committed artifacts or evidence.
+
 ## Next engineering slice
 
-1. Add a model-provider abstraction with routing, structured outputs, citations, and verifier/critic steps.
+1. Add a model-provider abstraction with routing, structured outputs, citations, and real verifier steps behind the current contracts.
 2. Generate arbitrary-topic graphs with provenance, confidence, prerequisite closure, and review gates.
 3. Connect the existing workspace to durable sessions, learner state, branches, notes, and review queues.
 4. Add assessment blueprints, item-family generation, similarity guards, solver validation, and calibrated knowledge tracing through the evidence-admission boundary.
 5. Replace development learner headers with real authentication-derived ownership before hosted multi-user use.
+6. Connect typed plan fields to UI affordances without redesigning the current workspace.
 
 The current UI is intentionally ready to connect to those contracts without pretending those services already exist.

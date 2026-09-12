@@ -16,6 +16,7 @@ from sqlalchemy import Connection, Engine, text
 
 from .database import create_database_engine, run_migrations
 from .models import GraphJob, GraphVersion, TopicScope
+from .policy_models import PolicyValidationResult, TeachingPlan
 from .session_models import ActionEvent, LearningSession, LessonArtifact, RunStatus
 
 
@@ -102,11 +103,15 @@ class Store:
 
     def save_action(self, action: RunStatus, idempotency_key: str | None = None) -> None:
         with self.transaction() as connection:
-            self._put(connection, "learning_actions", "id", action.run_id, {
-                "session_id": action.session_id,
-                "idempotency_key": idempotency_key,
-                "payload": action.model_dump_json(),
-            })
+            updated = connection.execute(
+                text("UPDATE learning_actions SET payload = :payload WHERE id = :id"),
+                {"id": action.run_id, "payload": action.model_dump_json()},
+            )
+            if not updated.rowcount:
+                connection.execute(
+                    text("INSERT INTO learning_actions(id, session_id, idempotency_key, payload) VALUES(:id, :session_id, :key, :payload)"),
+                    {"id": action.run_id, "session_id": action.session_id, "key": idempotency_key, "payload": action.model_dump_json()},
+                )
 
     def get_action(self, action_id: str) -> RunStatus | None:
         with self.engine.connect() as connection:
@@ -120,6 +125,47 @@ class Store:
                 {"session_id": session_id, "key": idempotency_key},
             ).mappings().first()
         return RunStatus.model_validate_json(row["payload"]) if row else None
+
+    def save_teaching_plan(self, plan: TeachingPlan) -> None:
+        with self.transaction() as connection:
+            connection.execute(
+                text("INSERT INTO teaching_plans(id, action_id, payload) VALUES(:id, :action_id, :payload)"),
+                {"id": plan.id, "action_id": plan.action_id, "payload": plan.model_dump_json()},
+            )
+
+    def get_teaching_plan(self, plan_id: str) -> TeachingPlan | None:
+        with self.engine.connect() as connection:
+            row = connection.execute(
+                text("SELECT payload FROM teaching_plans WHERE id = :id"), {"id": plan_id}
+            ).mappings().first()
+        return TeachingPlan.model_validate_json(row["payload"]) if row else None
+
+    def save_policy_validation(self, result: PolicyValidationResult) -> None:
+        with self.transaction() as connection:
+            connection.execute(
+                text("INSERT INTO policy_validation_results(id, action_id, plan_id, payload) VALUES(:id, :action_id, :plan_id, :payload)"),
+                {"id": result.id, "action_id": result.action_id, "plan_id": result.plan_id, "payload": result.model_dump_json()},
+            )
+
+    def get_policy_validation(self, action_id: str) -> PolicyValidationResult | None:
+        with self.engine.connect() as connection:
+            row = connection.execute(
+                text("SELECT payload FROM policy_validation_results WHERE action_id = :id"), {"id": action_id}
+            ).mappings().first()
+        return PolicyValidationResult.model_validate_json(row["payload"]) if row else None
+
+    def count_artifacts_for_action(self, action_id: str) -> int:
+        # Payloads are text on both databases; use each dialect's JSON extraction.
+        expression = (
+            "CAST(payload AS JSONB) ->> 'verification_run_id'"
+            if self.engine.dialect.name == "postgresql"
+            else "json_extract(payload, '$.verification_run_id')"
+        )
+        with self.engine.connect() as connection:
+            return int(connection.execute(
+                text(f"SELECT COUNT(*) FROM lesson_artifacts WHERE {expression} = :id"),
+                {"id": action_id},
+            ).scalar_one())
 
     def save_artifact(self, artifact: LessonArtifact) -> None:
         with self.transaction() as connection:

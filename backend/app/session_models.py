@@ -14,6 +14,7 @@ from typing import Any, Literal
 from pydantic import BaseModel, ConfigDict, Field, field_validator
 
 from .models import utc_now
+from .policy_models import ActionContext, PolicyValidationResult, TeachingPlan
 
 
 def _to_camel(value: str) -> str:
@@ -146,6 +147,7 @@ class LessonArtifact(ApiModel):
     blocks: list[LessonBlock] = Field(default_factory=list)
     next_action: Literal["continue", "check_understanding", "repair_prerequisite", "review"] | None = None
     status: Literal["pending", "approved", "qualified", "failed", "cancelled"] = "qualified"
+    teaching_plan_id: str | None = None
     verification_run_id: str | None = None
     generated_by: str = "deterministic_baseline"
     created_at: datetime = Field(default_factory=utc_now)
@@ -171,6 +173,9 @@ class RunStatus(ApiModel):
     progress: int = Field(ge=0, le=100)
     message: str | None = None
     intent: TeachingIntent | None = None
+    action_context: ActionContext | None = None
+    teaching_plan: TeachingPlan | None = None
+    policy_validation: PolicyValidationResult | None = None
     lesson: LessonArtifact | None = None
     created_at: datetime
     updated_at: datetime
