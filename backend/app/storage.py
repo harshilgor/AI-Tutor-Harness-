@@ -5,6 +5,7 @@ import sqlite3
 from pathlib import Path
 
 from .models import GraphJob, GraphVersion, JobStatus, TopicScope
+from .policy_models import PolicyValidationResult, TeachingPlan
 from .session_models import ActionEvent, LearningSession, LessonArtifact, RunStatus
 
 
@@ -55,6 +56,20 @@ class Store:
                 id TEXT PRIMARY KEY,
                 session_id TEXT NOT NULL REFERENCES learning_sessions(id),
                 payload TEXT NOT NULL
+            );
+            CREATE TABLE IF NOT EXISTS teaching_plans (
+                id TEXT PRIMARY KEY,
+                action_id TEXT NOT NULL REFERENCES learning_actions(id),
+                payload TEXT NOT NULL,
+                UNIQUE(action_id)
+            );
+            CREATE TABLE IF NOT EXISTS policy_validation_results (
+                id TEXT PRIMARY KEY,
+                action_id TEXT NOT NULL REFERENCES learning_actions(id),
+                plan_id TEXT NOT NULL REFERENCES teaching_plans(id),
+                payload TEXT NOT NULL,
+                UNIQUE(action_id),
+                UNIQUE(plan_id)
             );
             CREATE TABLE IF NOT EXISTS action_events (
                 id TEXT PRIMARY KEY,
@@ -116,7 +131,8 @@ class Store:
 
     def save_action(self, action: RunStatus, idempotency_key: str | None = None) -> None:
         self._connection.execute(
-            "INSERT OR REPLACE INTO learning_actions(id, session_id, idempotency_key, payload) VALUES(?, ?, ?, ?)",
+            """INSERT INTO learning_actions(id, session_id, idempotency_key, payload) VALUES(?, ?, ?, ?)
+               ON CONFLICT(id) DO UPDATE SET payload = excluded.payload""",
             (action.run_id, action.session_id, idempotency_key, action.model_dump_json()),
         )
         self._connection.commit()
@@ -131,6 +147,37 @@ class Store:
             (session_id, idempotency_key),
         ).fetchone()
         return RunStatus.model_validate_json(row["payload"]) if row else None
+
+    def save_teaching_plan(self, plan: TeachingPlan) -> None:
+        self._connection.execute(
+            "INSERT INTO teaching_plans(id, action_id, payload) VALUES(?, ?, ?)",
+            (plan.id, plan.action_id, plan.model_dump_json()),
+        )
+        self._connection.commit()
+
+    def get_teaching_plan(self, plan_id: str) -> TeachingPlan | None:
+        row = self._connection.execute("SELECT payload FROM teaching_plans WHERE id = ?", (plan_id,)).fetchone()
+        return TeachingPlan.model_validate_json(row["payload"]) if row else None
+
+    def save_policy_validation(self, result: PolicyValidationResult) -> None:
+        self._connection.execute(
+            "INSERT INTO policy_validation_results(id, action_id, plan_id, payload) VALUES(?, ?, ?, ?)",
+            (result.id, result.action_id, result.plan_id, result.model_dump_json()),
+        )
+        self._connection.commit()
+
+    def get_policy_validation(self, action_id: str) -> PolicyValidationResult | None:
+        row = self._connection.execute(
+            "SELECT payload FROM policy_validation_results WHERE action_id = ?", (action_id,)
+        ).fetchone()
+        return PolicyValidationResult.model_validate_json(row["payload"]) if row else None
+
+    def count_artifacts_for_action(self, action_id: str) -> int:
+        row = self._connection.execute(
+            "SELECT COUNT(*) AS count FROM lesson_artifacts WHERE json_extract(payload, '$.verification_run_id') = ?",
+            (action_id,),
+        ).fetchone()
+        return int(row["count"])
 
     def save_artifact(self, artifact: LessonArtifact) -> None:
         self._connection.execute(
