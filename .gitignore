@@ -1,0 +1,20 @@
+# Local dependencies and build output
+**/node_modules/
+**/.next/
+**/.vinext/
+**/dist/
+**/.wrangler/
+
+# Python caches and local runtime data
+**/__pycache__/
+**/*.py[cod]
+**/.pytest_cache/
+**/pytest-cache-files-*/
+backend/data/*.db
+
+# Local configuration and nested repository backup
+.env
+.env.*
+!**/.env.example
+web/.git-local-backup/
+*.tsbuildinfo
