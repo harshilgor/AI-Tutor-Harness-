@@ -23,6 +23,13 @@ from .models import (
 )
 from .storage import Store
 from .learning_kernel import build_lesson, classify_intent, resolve_concept
+from .learning_policy import (
+    assemble_action_context,
+    choose_teaching_plan,
+    resolve_prerequisites,
+    validate_teaching_plan,
+)
+from .policy_models import TeachingPlan
 from .session_models import (
     ActionEvent,
     ActionStatus,
@@ -236,22 +243,66 @@ def create_teaching_action(
         db.save_action(action, idempotency_key)
         _event(db, action_id, 1, "intent.classified", {"intent": intent.value})
         concept = resolve_concept(graph, request.concept_id)
-        action = action.model_copy(update={"status": ActionStatus.context_ready, "progress": 30, "message": "Graph context assembled.", "updated_at": utc_now()})
+        selected_gear = request.gear or session.gear
+        learner_projection = LearnerGraphRepository(db).get_graph(session.learner_id)
+        action_context = assemble_action_context(
+            action_id=action_id,
+            graph=graph,
+            session=session,
+            target_concept_id=concept.id,
+            intent=intent,
+            gear=selected_gear,
+            learner_graph=learner_projection,
+        )
+        action = action.model_copy(update={"status": ActionStatus.context_ready, "progress": 30, "action_context": action_context, "message": "Graph, position, gear, evidence, and intent context assembled.", "updated_at": utc_now()})
         db.save_action(action, idempotency_key)
-        _event(db, action_id, 2, "context.ready", {"graph_id": graph.id, "concept_id": concept.id, "graph_revision": graph.version})
-        action = action.model_copy(update={"status": ActionStatus.planned, "progress": 45, "message": "Teaching plan prepared.", "updated_at": utc_now()})
+        _event(db, action_id, 2, "context.ready", {
+            "graph_id": graph.id,
+            "concept_id": concept.id,
+            "graph_revision": graph.version,
+            "learner_state_version": action_context.learner_evidence.state_version,
+            "profile": action_context.teaching_profile.model_dump(mode="json", by_alias=True),
+        })
+        prerequisite_resolution = resolve_prerequisites(graph, action_context)
+        plan = choose_teaching_plan(graph, action_context, prerequisite_resolution, intent)
+        db.save_teaching_plan(plan)
+        action = action.model_copy(update={"status": ActionStatus.planned, "progress": 45, "teaching_plan": plan, "message": "Typed teaching plan prepared.", "updated_at": utc_now()})
         db.save_action(action, idempotency_key)
-        _event(db, action_id, 3, "plan.created", {"gear": (request.gear or session.gear).value, "concept_id": concept.id})
-        artifact = build_lesson(graph, concept, request, session.id, intent, session.graph_revision, action_id)
+        _event(db, action_id, 3, "plan.created", {
+            "plan_id": plan.id,
+            "gear": selected_gear.value,
+            "concept_id": concept.id,
+            "strategy": plan.strategy.value,
+            "gap_classification": plan.gap_classification.value,
+            "prerequisite_outcomes": [item.value for item in prerequisite_resolution.outcomes],
+            "representation_sequence": plan.representation_sequence,
+        })
+        validation = validate_teaching_plan(graph, action_context, plan)
+        db.save_policy_validation(validation)
+        action = action.model_copy(update={"policy_validation": validation, "updated_at": utc_now()})
+        db.save_action(action, idempotency_key)
+        _event(db, action_id, 4, "plan.validated", validation.model_dump(mode="json", by_alias=True))
+        if not validation.accepted:
+            raise RuntimeError("Teaching plan failed deterministic policy validation.")
+        artifact = build_lesson(
+            graph, concept, request, session.id, intent, session.graph_revision, action_id, action_context, plan
+        )
         db.save_artifact(artifact)
-        _event(db, action_id, 4, "artifact.created", {"lesson_id": artifact.id, "block_count": len(artifact.blocks)})
+        _event(db, action_id, 5, "artifact.created", {"lesson_id": artifact.id, "plan_id": plan.id, "block_count": len(artifact.blocks)})
         action = action.model_copy(update={"status": ActionStatus.generated, "progress": 70, "lesson": artifact, "message": "Structured lesson created.", "updated_at": utc_now()})
         db.save_action(action, idempotency_key)
-        _event(db, action_id, 5, "verification.completed", {"status": "qualified", "trust": "insufficient", "provider": artifact.generated_by})
-        action = action.model_copy(update={"status": ActionStatus.qualified_response, "progress": 100, "lesson": artifact, "message": "Lesson ready. Source review is still required.", "updated_at": utc_now()})
+        _event(db, action_id, 6, "verification.completed", {
+            "status": "qualified_not_verified",
+            "trust": "insufficient",
+            "provider": artifact.generated_by,
+            "source_backed_correctness": False,
+            "model_verified": False,
+            "calibrated_mastery": False,
+        })
+        action = action.model_copy(update={"status": ActionStatus.qualified_response, "progress": 100, "lesson": artifact, "message": "Lesson ready as a limited deterministic scaffold; no correctness or mastery claim was made.", "updated_at": utc_now()})
         db.save_action(action, idempotency_key)
-        _event(db, action_id, 6, "lesson.completed", {"lesson_id": artifact.id, "qualified": True})
-        updated_session = session.model_copy(update={"current_concept_id": concept.id, "current_lesson_id": artifact.id, "state_version": session.state_version + 1, "updated_at": utc_now()})
+        _event(db, action_id, 7, "lesson.completed", {"lesson_id": artifact.id, "qualified": True, "evidence_created": False, "mastery_updated": False})
+        updated_session = session.model_copy(update={"current_concept_id": concept.id, "current_lesson_id": artifact.id, "gear": selected_gear, "state_version": session.state_version + 1, "updated_at": utc_now()})
         db.save_session(updated_session)
         return action
     except HTTPException:
@@ -269,6 +320,14 @@ def get_teaching_action(run_id: str, db: Store = Depends(get_store)) -> RunStatu
     if action is None:
         raise HTTPException(status_code=404, detail={"code": "action_not_found", "message": "Teaching action does not exist."})
     return action
+
+
+@app.get("/v1/teaching-plans/{plan_id}", response_model=TeachingPlan)
+def get_teaching_plan(plan_id: str, db: Store = Depends(get_store)) -> TeachingPlan:
+    plan = db.get_teaching_plan(plan_id)
+    if plan is None:
+        raise HTTPException(status_code=404, detail={"code": "teaching_plan_not_found", "message": "Teaching plan does not exist."})
+    return plan
 
 
 @app.get("/v1/actions/{action_id}/events")

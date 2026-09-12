@@ -1,45 +1,27 @@
-"""Deterministic learning-kernel policy used until a model provider is added.
-
-The kernel still performs the important orchestration steps: intent selection,
-bounded graph-context assembly, teaching-profile resolution, and a structured
-lesson artifact.  Its output is explicitly qualified so it cannot be mistaken
-for source-verified domain teaching.
-"""
+"""Deterministic lesson rendering behind the typed learning policy."""
 
 from __future__ import annotations
 
 from uuid import uuid4
 
 from .models import Concept, GraphVersion
-from .session_models import (
-    ConceptTrust,
-    LessonArtifact,
-    LessonBlock,
-    TeachingActionInput,
-    TeachingGear,
-    TeachingIntent,
-)
+from .policy_models import ActionContext, TeachingPlan, TeachingStrategy
+from .session_models import ConceptTrust, LessonArtifact, LessonBlock, TeachingActionInput, TeachingGear, TeachingIntent
 
 
 def classify_intent(request: TeachingActionInput) -> TeachingIntent:
-    """Return the typed intent, using the message only for free-form prompts."""
-
     if request.intent != TeachingIntent.teach:
         return request.intent
     message = (request.message or "").lower()
-    if any(token in message for token in ("simpler", "simple", "plain language", "easier")):
-        return TeachingIntent.simplify
-    if any(token in message for token in ("example", "apply", "application")):
-        return TeachingIntent.example
-    if any(token in message for token in ("why", "how does", "how do")):
-        return TeachingIntent.why
-    if any(token in message for token in ("visual", "diagram", "draw")):
-        return TeachingIntent.visualize
-    if any(token in message for token in ("test me", "check me", "quiz", "understanding")):
-        return TeachingIntent.check_understanding
-    if any(token in message for token in ("continue", "resume", "where i left")):
-        return TeachingIntent.resume
-    return TeachingIntent.teach
+    rules = (
+        (("simpler", "simple", "plain language", "easier"), TeachingIntent.simplify),
+        (("example", "apply", "application"), TeachingIntent.example),
+        (("why", "how does", "how do"), TeachingIntent.why),
+        (("visual", "diagram", "draw"), TeachingIntent.visualize),
+        (("test me", "check me", "quiz", "understanding"), TeachingIntent.check_understanding),
+        (("continue", "resume", "where i left"), TeachingIntent.resume),
+    )
+    return next((intent for tokens, intent in rules if any(token in message for token in tokens)), TeachingIntent.teach)
 
 
 def resolve_concept(graph: GraphVersion, requested_id: str | None) -> Concept:
@@ -51,111 +33,108 @@ def resolve_concept(graph: GraphVersion, requested_id: str | None) -> Concept:
 
 
 def _trust(concept: Concept) -> ConceptTrust:
-    # Graph concepts currently use the original graph contract. Preserve its
-    # provenance semantics when projecting into the lesson contract.
-    status = {
-        "supported": "supported",
-        "partial": "partially_supported",
-        "unverified": "insufficient",
-    }.get(concept.support_status, "insufficient")
+    status = {"supported": "supported", "partial": "partially_supported", "unverified": "insufficient"}.get(
+        concept.support_status, "insufficient"
+    )
     return ConceptTrust(status=status, source_ids=list(concept.source_ids))
 
 
-def build_lesson(graph: GraphVersion, concept: Concept, request: TeachingActionInput, session_id: str, intent: TeachingIntent, graph_revision: int, action_id: str) -> LessonArtifact:
-    gear = request.gear or TeachingGear.guided
+def _representation_block(representation: str, graph: GraphVersion, concept: Concept, plan: TeachingPlan, order: int) -> LessonBlock:
+    bodies = {
+        "essential_explanation": f"{concept.summary} Focus on the one relationship needed for the current objective before adding detail.",
+        "brief_response_opportunity": f"In one sentence, what is {concept.title.lower()} helping you explain?",
+        "intuition": f"Build an intuition for {concept.title.lower()} by naming what changes, what stays fixed, and why that matters.",
+        "worked_example": f"Use one concrete {graph.title} situation. Identify the starting condition, apply the relationship step by step, and state the observable consequence.",
+        "guided_steps": "Step 1: name the relevant parts. Step 2: connect them. Step 3: test whether the connection answers the objective.",
+        "guided_response_opportunity": "Which of those three steps feels least certain? Your answer can locate the next useful explanation.",
+        "mechanism": f"Explain the mechanism inside {concept.title.lower()}: identify the inputs, the transformation or relationship, and the resulting behavior.",
+        "assumptions": "Keep the boundary explicit: identify which conditions the explanation assumes and which claims remain outside this limited graph.",
+        "derivation": "Develop the reasoning from the stated assumptions in small steps. This scaffold does not claim that a domain-specific derivation has been source-verified.",
+        "boundary_case": "Change one assumption and inspect where the explanation stops applying. A shortcut is not treated as a universal rule.",
+        "meaningful_connections": f"Connect the mechanism back to the objective for {concept.title}, without introducing unrelated map concepts.",
+        "independent_response_opportunity": f"Explain or apply {concept.title.lower()} in a changed situation without copying the scaffold.",
+        "plain_language_definition": f"In everyday language: {concept.summary} Introduce a technical term only when it becomes useful.",
+        "causal_or_logical_justification": f"Focus on why the selected claim about {concept.title.lower()} follows: state the premise, connecting reason, and conclusion.",
+        "explicit_assumptions": "List the assumptions before using the example so its conclusion is not presented as universally true.",
+        "checked_result": "Show how the result would be checked. The deterministic baseline cannot certify domain correctness, so this remains qualified.",
+        "response_opportunity": "What part of the relationship would you test next?",
+        "relationship_diagram": f"Structured view: {concept.title} → relevant parts → relationship → observable consequence.",
+        "labeled_text_equivalent": f"Text equivalent: begin at {concept.title}, follow one labeled relationship, and read the consequence at the final node.",
+        "position_recap": f"Resume at {concept.title}. Reopening preserves position; it does not infer progress or mastery.",
+        "independent_check": f"Without looking at a worked answer, explain what role {concept.title.lower()} plays in {graph.title} and name one assumption. No answer is revealed here.",
+    }
+    check_like = representation in {"brief_response_opportunity", "guided_response_opportunity", "independent_response_opportunity", "response_opportunity", "independent_check"}
+    kind = "example" if representation in {"worked_example", "explicit_assumptions", "checked_result"} else "visual" if representation == "relationship_diagram" else "check" if check_like else "explanation"
+    return LessonBlock(
+        id=f"block_{uuid4().hex[:10]}", kind=kind, heading=representation.replace("_", " ").title(), body=bodies[representation],
+        concept_ids=[concept.id], source_ids=list(concept.source_ids), trust=_trust(concept), order=order,
+        metadata={"representation": representation, "policyVersion": plan.policy_version},
+    )
+
+
+def build_lesson(
+    graph: GraphVersion,
+    concept: Concept,
+    request: TeachingActionInput,
+    session_id: str,
+    intent: TeachingIntent,
+    graph_revision: int,
+    action_id: str,
+    context: ActionContext,
+    plan: TeachingPlan,
+) -> LessonArtifact:
+    """Render the validated plan. Rendering never creates learner evidence."""
+
+    del request
     trust = _trust(concept)
-    label = "This is a working scaffold"
-    core = (
-        f"{concept.summary} Start by naming the idea, then connect it to the question you are trying to answer. "
-        "The map treats this as a proposed learning connection, so domain claims still need source review."
-    )
-    if intent == TeachingIntent.simplify:
-        core = f"In everyday terms: {concept.summary} Think of it as a useful handle for organizing the topic before adding detail."
-    elif intent == TeachingIntent.why:
-        core = f"The reason to study {concept.title.lower()} is that relationships explain more than isolated labels. {concept.summary}"
-    elif intent == TeachingIntent.example:
-        core = f"Try this small thought experiment: choose one familiar situation involving {graph.title}. Identify the parts, then ask which relationship the situation makes visible."
-    elif intent == TeachingIntent.visualize:
-        core = f"Picture {concept.title.lower()} as a node connected to the question, its parts, its mechanism, and one boundary. Follow one connection at a time instead of reading the whole map at once."
-    elif intent == TeachingIntent.resume:
-        core = f"Welcome back. We were working with {concept.title.lower()}. {concept.summary} Start by restating the idea in your own words, then we can continue."
-    elif intent == TeachingIntent.check_understanding:
-        core = f"Before moving on, explain in one sentence what role {concept.title.lower()} plays in {graph.title}. Your response is the useful evidence; opening this lesson does not change mastery."
+    blocks: list[LessonBlock] = []
+    if plan.strategy == TeachingStrategy.targeted_diagnostic and intent != TeachingIntent.check_understanding:
+        prerequisite = plan.uncertain_prerequisite_ids[0] if plan.uncertain_prerequisite_ids else concept.id
+        title = next((item.title for item in graph.concepts if item.id == prerequisite), "the prerequisite")
+        blocks.append(LessonBlock(
+            id=f"block_{uuid4().hex[:10]}", kind="check", heading="One focused diagnostic",
+            body=f"Before relying on {title}, explain its role in one sentence. This locates uncertainty; it does not mark the prerequisite failed or demonstrated.",
+            concept_ids=[prerequisite], trust=trust, order=0, metadata={"strategy": plan.strategy.value, "answerWithheld": True},
+        ))
+    elif plan.strategy == TeachingStrategy.focused_bridge:
+        prerequisite = plan.gap_prerequisite_ids[0]
+        title = next(item.title for item in graph.concepts if item.id == prerequisite)
+        blocks.append(LessonBlock(
+            id=f"block_{uuid4().hex[:10]}", kind="explanation", heading="Focused prerequisite bridge",
+            body=f"Repair only the blocking idea, {title}, then return to {concept.title}. The original objective and lesson position stay fixed.",
+            concept_ids=[prerequisite, concept.id], trust=trust, order=0,
+            metadata={"strategy": plan.strategy.value, "returnConceptId": concept.id},
+        ))
+    elif plan.strategy == TeachingStrategy.proposed_learning_path:
+        route = plan.prerequisite_resolution.direct_prerequisite_ids or plan.prerequisite_resolution.prerequisite_ids
+        blocks.append(LessonBlock(
+            id=f"block_{uuid4().hex[:10]}", kind="explanation", heading="Proposed learning path",
+            body="The prerequisite route is too uncertain or constrained to start silently. Choose a bridge or an explicitly limited overview.",
+            concept_ids=[*route, concept.id], trust=trust, order=0,
+            metadata={"strategy": plan.strategy.value, "route": route, "outcomes": [item.value for item in plan.prerequisite_resolution.outcomes]},
+        ))
+    elif plan.strategy == TeachingStrategy.inline_definition:
+        prerequisite = plan.uncertain_prerequisite_ids[0]
+        title = next(item.title for item in graph.concepts if item.id == prerequisite)
+        blocks.append(LessonBlock(
+            id=f"block_{uuid4().hex[:10]}", kind="explanation", heading="Necessary definition",
+            body=f"Use {title} only as a short working definition, then continue to {concept.title}; no mastery is assumed.",
+            concept_ids=[prerequisite, concept.id], trust=trust, order=0, metadata={"strategy": plan.strategy.value},
+        ))
 
-    blocks = [
-        LessonBlock(
-            id=f"block_{uuid4().hex[:10]}",
-            kind="explanation",
-            heading="Start with the idea",
-            body=core,
-            concept_ids=[concept.id],
-            source_ids=list(concept.source_ids),
-            trust=trust,
-            order=0,
-        )
-    ]
-    if gear in (TeachingGear.guided, TeachingGear.deep):
-        blocks.append(
-            LessonBlock(
-                id=f"block_{uuid4().hex[:10]}",
-                kind="example",
-                heading="A concrete handle",
-                body=f"Use {graph.title} as the setting. Point to one part, one interaction, and one observable consequence. If you cannot name the interaction, that is the next useful question.",
-                concept_ids=[concept.id],
-                source_ids=list(concept.source_ids),
-                trust=trust,
-                order=1,
-            )
-        )
-    if gear == TeachingGear.deep:
-        blocks.append(
-            LessonBlock(
-                id=f"block_{uuid4().hex[:10]}",
-                kind="analogy",
-                heading="Go one level deeper",
-                body=f"Separate the boundary of {graph.title} from the behavior inside it. Then ask which assumption would have to change for this explanation to stop being useful. That boundary check prevents a teaching shortcut from becoming a universal rule.",
-                concept_ids=[concept.id],
-                source_ids=list(concept.source_ids),
-                trust=trust,
-                order=2,
-            )
-        )
-    blocks.extend(
-        [
-            LessonBlock(
-                id=f"block_{uuid4().hex[:10]}",
-                kind="reflection",
-                heading="Your turn",
-                body=f"In your own words, what is {concept.title.lower()} helping you notice? Keep the answer short; the goal is to expose the next gap, not to sound polished.",
-                concept_ids=[concept.id],
-                source_ids=list(concept.source_ids),
-                trust=trust,
-                order=len(blocks),
-            ),
-            LessonBlock(
-                id=f"block_{uuid4().hex[:10]}",
-                kind="source_note",
-                heading=label,
-                body="This response came from the deterministic local provider. It is suitable for exercising the learning flow, but it is not a source-verified answer and does not update mastery.",
-                concept_ids=[concept.id],
-                source_ids=list(concept.source_ids),
-                trust=trust,
-                order=len(blocks) + 1,
-                metadata={"provider": "deterministic_baseline", "qualified": True},
-            ),
-        ]
-    )
+    if not (plan.strategy == TeachingStrategy.targeted_diagnostic and intent != TeachingIntent.check_understanding):
+        for representation in plan.representation_sequence:
+            blocks.append(_representation_block(representation, graph, concept, plan, len(blocks)))
+
+    blocks.append(LessonBlock(
+        id=f"block_{uuid4().hex[:10]}", kind="source_note", heading="This is a working scaffold",
+        body="The deterministic local provider exercises policy and lesson flow only. It is not source-backed correctness, model verification, evidence, or calibrated mastery.",
+        concept_ids=[concept.id], source_ids=list(concept.source_ids), trust=trust, order=len(blocks),
+        metadata={"provider": "deterministic_baseline", "qualified": True, "planId": plan.id},
+    ))
     return LessonArtifact(
-        id=f"lesson_{uuid4().hex}",
-        session_id=session_id,
-        concept_id=concept.id,
-        graph_revision=graph_revision,
-        gear=gear,
-        title=concept.title,
-        blocks=blocks,
-        next_action="check_understanding" if intent != TeachingIntent.check_understanding else "continue",
-        status="qualified",
-        verification_run_id=action_id,
-        generated_by="deterministic_baseline",
+        id=f"lesson_{uuid4().hex}", session_id=session_id, concept_id=concept.id, graph_revision=graph_revision,
+        gear=TeachingGear(context.teaching_profile.gear), title=concept.title, blocks=blocks,
+        next_action="repair_prerequisite" if plan.strategy in {TeachingStrategy.focused_bridge, TeachingStrategy.proposed_learning_path} else "continue" if intent == TeachingIntent.check_understanding else "check_understanding",
+        status="qualified", teaching_plan_id=plan.id, verification_run_id=action_id, generated_by="deterministic_baseline",
     )
-
