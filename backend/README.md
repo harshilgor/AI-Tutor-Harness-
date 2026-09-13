@@ -1,6 +1,6 @@
 # AI Tutor Harness backend
 
-This is the first functional backend slice for the learning harness. It
+This backend is the functional modular-monolith slice for the learning harness. It
 accepts any topic, creates a bounded `TopicScope`, runs a persisted graph job,
 and returns a versioned graph with stable IDs, typed edges, and an explicit
 trust label.
@@ -15,12 +15,29 @@ publication checks.
 
 ## Run locally
 
-From the project root:
+Install dependencies and run from the project root. SQLite remains the zero-
+service local/test fallback:
 
-```powershell
-$env:FORMA_DB_PATH = "backend/data/forma.db"
+```bash
+python -m pip install -r backend/requirements.txt
+export DATABASE_URL="sqlite+pysqlite:///backend/data/forma.db"
 python -m uvicorn backend.app.main:app --host 127.0.0.1 --port 8000
 ```
+
+For PostgreSQL, create a database and replace the URL:
+
+```bash
+createdb ai_tutor
+export DATABASE_URL="postgresql+psycopg://localhost/ai_tutor"
+python -m alembic -c backend/alembic.ini upgrade head
+python -m uvicorn backend.app.main:app --host 127.0.0.1 --port 8000
+```
+
+Startup upgrades the schema automatically. The explicit Alembic command is
+useful for release checks. Deployed environments must set
+`AI_TUTOR_ENV=production` and a PostgreSQL URL; SQLite is refused in that mode.
+Legacy `FORMA_DB_PATH` remains a local-only fallback so existing databases can
+be upgraded in place.
 
 The API is available at `http://127.0.0.1:8000` and its OpenAPI document at
 `/docs`.
@@ -119,15 +136,33 @@ POST /v1/learners/{learner_id}/knowledge-graph/events
 GET  /v1/learners/{learner_id}/knowledge-graph/events
 ```
 
-The current event projection supports concept exploration, lesson completion,
+The compatibility event projection supports concept exploration, lesson completion,
 assessment evidence, demonstrated concepts, review due, and detected
 misconceptions. It records events separately from the graph snapshot and keeps
-mastery estimation owned by the future learner-state module; these states are
-an initial visual/UX projection rather than a claim of calibrated mastery.
+canonical learner-state estimation owned by `LearnerStateService`; these states
+are a visual/UX projection rather than a source of canonical mastery.
 
 Session creation now accepts an optional `learner_id` (default `local`) and
 imports the session's topic graph into that learner's global projection. This
 keeps the graph continuous across sessions and topics. Action evidence is not
-implicitly inferred from session creation or generated lesson output; wiring
-teaching-action and assessment evidence into the learner-state commit path is
-the next step.
+implicitly inferred from session creation or generated lesson output. Those
+actions append activity events only.
+
+## Persistent learner state
+
+The state API persists curriculum compatibility, canonical concept state,
+events, evidence and supersession, misconception hypotheses, review schedules
+and history, nested branches, and anchored notes with revisions. Requests are
+scoped by learner ID and use camelCase JSON. Evidence admission is idempotent
+and is the only path that can update canonical concept state.
+
+See [STATE_CONTRACT.md](STATE_CONTRACT.md) for exact routes, the development
+identity safety boundary, conservative reducer behavior, and deferred ownership
+for assessments, knowledge tracing, and authentication.
+
+Run validation with:
+
+```bash
+python -m pytest backend/tests -q
+python -m compileall -q backend/app backend/migrations
+```

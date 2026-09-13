@@ -1,17 +1,16 @@
 from __future__ import annotations
 
-import os
 import json
-from datetime import datetime
-from pathlib import Path
 from uuid import uuid4
 
-from fastapi import Depends, FastAPI, HTTPException, Header, status
+from fastapi import Depends, FastAPI, Header, HTTPException, status
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import StreamingResponse
 
+from .database import database_url
 from .graph_generator import GraphGenerator
 from .learner_graph import LearnerGraphRepository, build_learner_graph_router
+from .learning_kernel import build_lesson, classify_intent, resolve_concept
 from .models import (
     CreateGraphJobResponse,
     GraphJob,
@@ -21,8 +20,6 @@ from .models import (
     TopicScopeCreate,
     utc_now,
 )
-from .storage import Store
-from .learning_kernel import build_lesson, classify_intent, resolve_concept
 from .learning_policy import (
     assemble_action_context,
     choose_teaching_plan,
@@ -38,14 +35,10 @@ from .session_models import (
     SessionCreate,
     TeachingActionInput,
 )
-
-
-def database_path() -> str:
-    configured = os.getenv("FORMA_DB_PATH")
-    if configured:
-        return configured
-    return str(Path(__file__).resolve().parents[1] / "data" / "forma.db")
-
+from .state_models import StateEventCreate
+from .state_routes import build_state_router
+from .state_service import LearnerStateService
+from .storage import Store
 
 app = FastAPI(title="AI Tutor Harness API", version="0.1.0")
 app.add_middleware(
@@ -55,7 +48,7 @@ app.add_middleware(
     allow_headers=["*"],
     allow_credentials=True,
 )
-store = Store(database_path())
+store = Store(database_url())
 generator = GraphGenerator()
 
 
@@ -67,6 +60,7 @@ def get_store() -> Store:
 # same persistence connection, while its schema and projection logic remain
 # isolated from the topic graph API above.
 app.include_router(build_learner_graph_router(get_store))
+app.include_router(build_state_router(get_store))
 
 
 @app.get("/health")
@@ -187,6 +181,17 @@ def create_learning_session(request: SessionCreate, db: Store = Depends(get_stor
     # starts. Repeated imports are deduplicated by LearnerGraphRepository.
     LearnerGraphRepository(db).import_topic_graph(session.learner_id, graph)
     db.save_session(session)
+    LearnerStateService(db).append_event(
+        session.learner_id,
+        StateEventCreate(
+            kind="session.started",
+            session_id=session.id,
+            concept_id=session.current_concept_id,
+            idempotency_key=f"session-started:{session.id}",
+            payload={"graphId": session.graph_id, "graphRevision": session.graph_revision},
+            provenance={"source": "session_api"},
+        ),
+    )
     return session
 
 
@@ -304,6 +309,18 @@ def create_teaching_action(
         _event(db, action_id, 7, "lesson.completed", {"lesson_id": artifact.id, "qualified": True, "evidence_created": False, "mastery_updated": False})
         updated_session = session.model_copy(update={"current_concept_id": concept.id, "current_lesson_id": artifact.id, "gear": selected_gear, "state_version": session.state_version + 1, "updated_at": utc_now()})
         db.save_session(updated_session)
+        LearnerStateService(db).append_event(
+            session.learner_id,
+            StateEventCreate(
+                kind="lesson.completed",
+                concept_id=concept.id,
+                session_id=session.id,
+                action_id=action_id,
+                idempotency_key=f"lesson-completed:{action_id}",
+                payload={"lessonId": artifact.id, "qualified": True},
+                provenance={"source": "learning_kernel", "provider": artifact.generated_by},
+            ),
+        )
         return action
     except HTTPException:
         raise

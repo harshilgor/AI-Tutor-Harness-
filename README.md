@@ -16,4 +16,4 @@ The first website slice is in [`web/`](web/). See [`web/README.md`](web/README.m
 
 The first backend slice is in [`backend/`](backend/). It provides the local FastAPI graph flow, SQLite persistence, typed graph records, and the deterministic provider boundary described in [`backend/README.md`](backend/README.md).
 
-**Status:** Design baseline plus interactive website, learning-kernel action flow, and learner-wide graph projection, version 0.4, 11 September 2026. The current backend runs a persisted deterministic teaching path without an API key; source-backed model teaching and hosted publishing remain next.
+**Status:** Design baseline plus interactive website, learning-kernel action flow, learner-wide graph projection, and persistent learner-state/evidence infrastructure, version 0.5, 12 September 2026. The backend supports PostgreSQL with migrated SQLite local tests and runs a deterministic teaching path without an API key; source-backed model teaching, calibrated knowledge tracing, authentication, and hosted publishing remain next.

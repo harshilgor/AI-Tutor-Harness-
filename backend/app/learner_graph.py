@@ -19,10 +19,10 @@ from uuid import uuid4
 
 from fastapi import APIRouter, HTTPException, Path, status
 from pydantic import BaseModel, Field, field_validator
+from sqlalchemy import Connection, text
 
 from .models import GraphVersion, utc_now
 from .storage import Store
-
 
 LearnerNodeState = Literal[
     "unexplored",
@@ -168,58 +168,6 @@ class LearnerGraphRepository:
 
     def __init__(self, db: Store):
         self.db = db
-        # Store intentionally remains the narrow adapter for the existing
-        # topic graph.  These tables are isolated and can move to a dedicated
-        # repository without changing route contracts.
-        self.connection = db._connection
-        self.connection.executescript(
-            """
-            CREATE TABLE IF NOT EXISTS learner_graphs (
-                learner_id TEXT PRIMARY KEY,
-                payload TEXT NOT NULL
-            );
-            CREATE TABLE IF NOT EXISTS learner_graph_concepts (
-                learner_id TEXT NOT NULL,
-                id TEXT NOT NULL,
-                canonical_key TEXT NOT NULL,
-                payload TEXT NOT NULL,
-                PRIMARY KEY (learner_id, id),
-                UNIQUE (learner_id, canonical_key)
-            );
-            CREATE TABLE IF NOT EXISTS learner_graph_edges (
-                learner_id TEXT NOT NULL,
-                id TEXT NOT NULL,
-                source_concept_id TEXT NOT NULL,
-                target_concept_id TEXT NOT NULL,
-                edge_type TEXT NOT NULL,
-                payload TEXT NOT NULL,
-                PRIMARY KEY (learner_id, id),
-                UNIQUE (learner_id, source_concept_id, target_concept_id, edge_type)
-            );
-            CREATE TABLE IF NOT EXISTS learner_graph_events (
-                id TEXT PRIMARY KEY,
-                learner_id TEXT NOT NULL,
-                concept_id TEXT NOT NULL,
-                event_type TEXT NOT NULL,
-                payload TEXT NOT NULL,
-                created_at TEXT NOT NULL
-            );
-            """
-        )
-        # Recover cleanly if an early local run created the event table before
-        # its timestamp column was introduced.
-        event_columns = {
-            row["name"]
-            for row in self.connection.execute("PRAGMA table_info(learner_graph_events)").fetchall()
-        }
-        if "created_at" not in event_columns:
-            self.connection.execute(
-                "ALTER TABLE learner_graph_events ADD COLUMN created_at TEXT NOT NULL DEFAULT ''"
-            )
-        self.connection.execute(
-            "CREATE INDEX IF NOT EXISTS idx_learner_graph_events_learner ON learner_graph_events(learner_id, created_at)"
-        )
-        self.connection.commit()
 
     @staticmethod
     def graph_id(learner_id: str) -> str:
@@ -237,50 +185,36 @@ class LearnerGraphRepository:
         )
 
     def get_graph(self, learner_id: str) -> LearnerGraph:
-        row = self.connection.execute(
-            "SELECT payload FROM learner_graphs WHERE learner_id = ?", (learner_id,)
-        ).fetchone()
+        with self.db.engine.connect() as connection:
+            row = connection.execute(
+                text("SELECT payload FROM learner_graphs WHERE learner_id = :learner_id"),
+                {"learner_id": learner_id},
+            ).mappings().first()
         if row:
             return LearnerGraph.model_validate_json(row["payload"])
         graph = self._new_graph(learner_id)
         self._save_graph(graph)
         return graph
 
-    def _save_graph(self, graph: LearnerGraph, *, commit: bool = True) -> None:
-        self.connection.execute(
-            "INSERT OR REPLACE INTO learner_graphs(learner_id, payload) VALUES(?, ?)",
-            (graph.learner_id, graph.model_dump_json()),
-        )
+    def _save_graph(self, graph: LearnerGraph, connection: Connection | None = None) -> None:
+        if connection is None:
+            with self.db.transaction() as owned_connection:
+                self._save_graph(graph, owned_connection)
+            return
+        self.db._put(connection, "learner_graphs", "learner_id", graph.learner_id, {"payload": graph.model_dump_json()})
         # Keep normalized rows for future neighborhood queries and audit tools.
-        self.connection.execute(
-            "DELETE FROM learner_graph_concepts WHERE learner_id = ?", (graph.learner_id,)
-        )
-        self.connection.executemany(
-            "INSERT INTO learner_graph_concepts(learner_id, id, canonical_key, payload) VALUES(?, ?, ?, ?)",
-            [
-                (graph.learner_id, concept.id, concept.canonical_key, concept.model_dump_json())
-                for concept in graph.concepts
-            ],
-        )
-        self.connection.execute(
-            "DELETE FROM learner_graph_edges WHERE learner_id = ?", (graph.learner_id,)
-        )
-        self.connection.executemany(
-            "INSERT INTO learner_graph_edges(learner_id, id, source_concept_id, target_concept_id, edge_type, payload) VALUES(?, ?, ?, ?, ?, ?)",
-            [
-                (
-                    graph.learner_id,
-                    edge.id,
-                    edge.source_concept_id,
-                    edge.target_concept_id,
-                    edge.type,
-                    edge.model_dump_json(),
-                )
-                for edge in graph.edges
-            ],
-        )
-        if commit:
-            self.connection.commit()
+        connection.execute(text("DELETE FROM learner_graph_concepts WHERE learner_id = :learner_id"), {"learner_id": graph.learner_id})
+        if graph.concepts:
+            connection.execute(
+                text("INSERT INTO learner_graph_concepts(learner_id, id, canonical_key, payload) VALUES(:learner_id, :id, :canonical_key, :payload)"),
+                [{"learner_id": graph.learner_id, "id": concept.id, "canonical_key": concept.canonical_key, "payload": concept.model_dump_json()} for concept in graph.concepts],
+            )
+        connection.execute(text("DELETE FROM learner_graph_edges WHERE learner_id = :learner_id"), {"learner_id": graph.learner_id})
+        if graph.edges:
+            connection.execute(
+                text("INSERT INTO learner_graph_edges(learner_id, id, source_concept_id, target_concept_id, edge_type, payload) VALUES(:learner_id, :id, :source_concept_id, :target_concept_id, :edge_type, :payload)"),
+                [{"learner_id": graph.learner_id, "id": edge.id, "source_concept_id": edge.source_concept_id, "target_concept_id": edge.target_concept_id, "edge_type": edge.type, "payload": edge.model_dump_json()} for edge in graph.edges],
+            )
 
     def import_topic_graph(self, learner_id: str, source: GraphVersion) -> LearnerGraphMutationResponse:
         graph = self.get_graph(learner_id)
@@ -384,8 +318,9 @@ class LearnerGraphRepository:
             )
         # The event and projection update commit together so a partial import
         # cannot leave an audit record without the corresponding graph state.
-        self._save_event(event, commit=False)
-        self._save_graph(graph)
+        with self.db.transaction() as connection:
+            self._save_event(event, connection)
+            self._save_graph(graph, connection)
         return LearnerGraphMutationResponse(graph=graph, event=event)
 
     def append_event(self, learner_id: str, request: LearnerGraphEventCreate) -> LearnerGraphMutationResponse:
@@ -436,23 +371,23 @@ class LearnerGraphRepository:
             metadata=request.metadata,
             created_at=now,
         )
-        self._save_event(event, commit=False)
-        self._save_graph(graph)
+        with self.db.transaction() as connection:
+            self._save_event(event, connection)
+            self._save_graph(graph, connection)
         return LearnerGraphMutationResponse(graph=graph, event=event)
 
-    def _save_event(self, event: LearnerGraphEvent, *, commit: bool = True) -> None:
-        self.connection.execute(
-            "INSERT INTO learner_graph_events(id, learner_id, concept_id, event_type, payload, created_at) VALUES(?, ?, ?, ?, ?, ?)",
-            (event.id, event.learner_id, event.concept_id, event.event_type, event.model_dump_json(), event.created_at.isoformat()),
+    def _save_event(self, event: LearnerGraphEvent, connection: Connection) -> None:
+        connection.execute(
+            text("INSERT INTO learner_graph_events(id, learner_id, concept_id, event_type, payload, created_at) VALUES(:id, :learner_id, :concept_id, :event_type, :payload, :created_at)"),
+            {"id": event.id, "learner_id": event.learner_id, "concept_id": event.concept_id, "event_type": event.event_type, "payload": event.model_dump_json(), "created_at": event.created_at.isoformat()},
         )
-        if commit:
-            self.connection.commit()
 
     def list_events(self, learner_id: str, limit: int = 100) -> list[LearnerGraphEvent]:
-        rows = self.connection.execute(
-            "SELECT payload FROM learner_graph_events WHERE learner_id = ? ORDER BY rowid DESC LIMIT ?",
-            (learner_id, limit),
-        ).fetchall()
+        with self.db.engine.connect() as connection:
+            rows = connection.execute(
+                text("SELECT payload FROM learner_graph_events WHERE learner_id = :learner_id ORDER BY created_at DESC LIMIT :limit"),
+                {"learner_id": learner_id, "limit": limit},
+            ).mappings().all()
         return [LearnerGraphEvent.model_validate_json(row["payload"]) for row in rows]
 
 

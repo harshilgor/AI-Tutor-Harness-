@@ -1,204 +1,192 @@
+"""Persistence adapter shared by the modular-monolith services.
+
+The adapter keeps the original method surface while moving connection and
+dialect concerns behind SQLAlchemy. New state services use ``transaction`` to
+commit canonical state, evidence, and audit events atomically.
+"""
+
 from __future__ import annotations
 
-import json
-import sqlite3
+from collections.abc import Iterator
+from contextlib import contextmanager
 from pathlib import Path
+from typing import Any
 
-from .models import GraphJob, GraphVersion, JobStatus, TopicScope
+from sqlalchemy import Connection, Engine, text
+
+from .database import create_database_engine, run_migrations
+from .models import GraphJob, GraphVersion, TopicScope
 from .policy_models import PolicyValidationResult, TeachingPlan
 from .session_models import ActionEvent, LearningSession, LessonArtifact, RunStatus
 
 
 class Store:
-    """Small local persistence adapter.
+    def __init__(self, location: str | Path):
+        raw = str(location)
+        if "://" in raw:
+            self.url = raw
+        elif raw == ":memory:":
+            self.url = "sqlite+pysqlite:///file:ai_tutor_memdb?mode=memory&cache=shared&uri=true"
+        else:
+            self.url = f"sqlite+pysqlite:///{Path(raw).resolve()}"
+        run_migrations(self.url)
+        self.engine: Engine = create_database_engine(self.url)
 
-    SQLite keeps the first slice runnable without external services. Its
-    repository interface is intentionally narrow so PostgreSQL can replace it
-    without changing API or domain code.
-    """
-
-    def __init__(self, path: str | Path):
-        self.path = str(path)
-        if self.path != ":memory:":
-            Path(self.path).parent.mkdir(parents=True, exist_ok=True)
-        self._connection = sqlite3.connect(self.path, check_same_thread=False)
-        self._connection.row_factory = sqlite3.Row
-        self._connection.execute("PRAGMA foreign_keys = ON")
-        self._connection.executescript(
-            """
-            CREATE TABLE IF NOT EXISTS topic_scopes (
-                id TEXT PRIMARY KEY,
-                payload TEXT NOT NULL
-            );
-            CREATE TABLE IF NOT EXISTS graph_jobs (
-                id TEXT PRIMARY KEY,
-                scope_id TEXT NOT NULL REFERENCES topic_scopes(id),
-                payload TEXT NOT NULL
-            );
-            CREATE TABLE IF NOT EXISTS graph_versions (
-                id TEXT PRIMARY KEY,
-                scope_id TEXT NOT NULL REFERENCES topic_scopes(id),
-                payload TEXT NOT NULL
-            );
-            CREATE TABLE IF NOT EXISTS learning_sessions (
-                id TEXT PRIMARY KEY,
-                graph_id TEXT NOT NULL REFERENCES graph_versions(id),
-                payload TEXT NOT NULL
-            );
-            CREATE TABLE IF NOT EXISTS learning_actions (
-                id TEXT PRIMARY KEY,
-                session_id TEXT NOT NULL REFERENCES learning_sessions(id),
-                idempotency_key TEXT,
-                payload TEXT NOT NULL,
-                UNIQUE(session_id, idempotency_key)
-            );
-            CREATE TABLE IF NOT EXISTS lesson_artifacts (
-                id TEXT PRIMARY KEY,
-                session_id TEXT NOT NULL REFERENCES learning_sessions(id),
-                payload TEXT NOT NULL
-            );
-            CREATE TABLE IF NOT EXISTS teaching_plans (
-                id TEXT PRIMARY KEY,
-                action_id TEXT NOT NULL REFERENCES learning_actions(id),
-                payload TEXT NOT NULL,
-                UNIQUE(action_id)
-            );
-            CREATE TABLE IF NOT EXISTS policy_validation_results (
-                id TEXT PRIMARY KEY,
-                action_id TEXT NOT NULL REFERENCES learning_actions(id),
-                plan_id TEXT NOT NULL REFERENCES teaching_plans(id),
-                payload TEXT NOT NULL,
-                UNIQUE(action_id),
-                UNIQUE(plan_id)
-            );
-            CREATE TABLE IF NOT EXISTS action_events (
-                id TEXT PRIMARY KEY,
-                action_id TEXT NOT NULL REFERENCES learning_actions(id),
-                sequence INTEGER NOT NULL,
-                payload TEXT NOT NULL,
-                UNIQUE(action_id, sequence)
-            );
-            """
-        )
-        self._connection.commit()
+    @contextmanager
+    def transaction(self) -> Iterator[Connection]:
+        with self.engine.begin() as connection:
+            yield connection
 
     def close(self) -> None:
-        self._connection.close()
+        self.engine.dispose()
+
+    @staticmethod
+    def _put(connection: Connection, table: str, key_column: str, key: str, values: dict[str, Any]) -> None:
+        exists = connection.execute(
+            text(f"SELECT 1 FROM {table} WHERE {key_column} = :key"), {"key": key}
+        ).first()
+        if exists:
+            assignments = ", ".join(f"{column} = :{column}" for column in values)
+            connection.execute(
+                text(f"UPDATE {table} SET {assignments} WHERE {key_column} = :key"),
+                {**values, "key": key},
+            )
+        else:
+            insert_values = {key_column: key, **values}
+            columns = ", ".join(insert_values)
+            parameters = ", ".join(f":{column}" for column in insert_values)
+            connection.execute(text(f"INSERT INTO {table} ({columns}) VALUES ({parameters})"), insert_values)
 
     def save_scope(self, scope: TopicScope) -> None:
-        self._connection.execute(
-            "INSERT OR REPLACE INTO topic_scopes(id, payload) VALUES(?, ?)",
-            (scope.id, scope.model_dump_json()),
-        )
-        self._connection.commit()
+        with self.transaction() as connection:
+            self._put(connection, "topic_scopes", "id", scope.id, {"payload": scope.model_dump_json()})
 
     def get_scope(self, scope_id: str) -> TopicScope | None:
-        row = self._connection.execute("SELECT payload FROM topic_scopes WHERE id = ?", (scope_id,)).fetchone()
+        with self.engine.connect() as connection:
+            row = connection.execute(text("SELECT payload FROM topic_scopes WHERE id = :id"), {"id": scope_id}).mappings().first()
         return TopicScope.model_validate_json(row["payload"]) if row else None
 
     def save_job(self, job: GraphJob) -> None:
-        self._connection.execute(
-            "INSERT OR REPLACE INTO graph_jobs(id, scope_id, payload) VALUES(?, ?, ?)",
-            (job.id, job.scope_id, job.model_dump_json()),
-        )
-        self._connection.commit()
+        with self.transaction() as connection:
+            self._put(connection, "graph_jobs", "id", job.id, {"scope_id": job.scope_id, "payload": job.model_dump_json()})
 
     def get_job(self, job_id: str) -> GraphJob | None:
-        row = self._connection.execute("SELECT payload FROM graph_jobs WHERE id = ?", (job_id,)).fetchone()
+        with self.engine.connect() as connection:
+            row = connection.execute(text("SELECT payload FROM graph_jobs WHERE id = :id"), {"id": job_id}).mappings().first()
         return GraphJob.model_validate_json(row["payload"]) if row else None
 
     def save_graph(self, graph: GraphVersion) -> None:
-        self._connection.execute(
-            "INSERT OR REPLACE INTO graph_versions(id, scope_id, payload) VALUES(?, ?, ?)",
-            (graph.id, graph.scope_id, graph.model_dump_json()),
-        )
-        self._connection.commit()
+        with self.transaction() as connection:
+            self._put(connection, "graph_versions", "id", graph.id, {"scope_id": graph.scope_id, "payload": graph.model_dump_json()})
 
     def get_graph(self, graph_id: str) -> GraphVersion | None:
-        row = self._connection.execute("SELECT payload FROM graph_versions WHERE id = ?", (graph_id,)).fetchone()
+        with self.engine.connect() as connection:
+            row = connection.execute(text("SELECT payload FROM graph_versions WHERE id = :id"), {"id": graph_id}).mappings().first()
         return GraphVersion.model_validate_json(row["payload"]) if row else None
 
     def save_session(self, session: LearningSession) -> None:
-        self._connection.execute(
-            "INSERT OR REPLACE INTO learning_sessions(id, graph_id, payload) VALUES(?, ?, ?)",
-            (session.id, session.graph_id, session.model_dump_json()),
-        )
-        self._connection.commit()
+        with self.transaction() as connection:
+            self._put(connection, "learning_sessions", "id", session.id, {
+                "graph_id": session.graph_id,
+                "learner_id": session.learner_id,
+                "current_concept_id": session.current_concept_id,
+                "current_lesson_id": session.current_lesson_id,
+                "state_version": session.state_version,
+                "updated_at": session.updated_at,
+                "payload": session.model_dump_json(),
+            })
 
     def get_session(self, session_id: str) -> LearningSession | None:
-        row = self._connection.execute("SELECT payload FROM learning_sessions WHERE id = ?", (session_id,)).fetchone()
+        with self.engine.connect() as connection:
+            row = connection.execute(text("SELECT payload FROM learning_sessions WHERE id = :id"), {"id": session_id}).mappings().first()
         return LearningSession.model_validate_json(row["payload"]) if row else None
 
     def save_action(self, action: RunStatus, idempotency_key: str | None = None) -> None:
-        self._connection.execute(
-            """INSERT INTO learning_actions(id, session_id, idempotency_key, payload) VALUES(?, ?, ?, ?)
-               ON CONFLICT(id) DO UPDATE SET payload = excluded.payload""",
-            (action.run_id, action.session_id, idempotency_key, action.model_dump_json()),
-        )
-        self._connection.commit()
+        with self.transaction() as connection:
+            updated = connection.execute(
+                text("UPDATE learning_actions SET payload = :payload WHERE id = :id"),
+                {"id": action.run_id, "payload": action.model_dump_json()},
+            )
+            if not updated.rowcount:
+                connection.execute(
+                    text("INSERT INTO learning_actions(id, session_id, idempotency_key, payload) VALUES(:id, :session_id, :key, :payload)"),
+                    {"id": action.run_id, "session_id": action.session_id, "key": idempotency_key, "payload": action.model_dump_json()},
+                )
 
     def get_action(self, action_id: str) -> RunStatus | None:
-        row = self._connection.execute("SELECT payload FROM learning_actions WHERE id = ?", (action_id,)).fetchone()
+        with self.engine.connect() as connection:
+            row = connection.execute(text("SELECT payload FROM learning_actions WHERE id = :id"), {"id": action_id}).mappings().first()
         return RunStatus.model_validate_json(row["payload"]) if row else None
 
     def get_action_by_idempotency(self, session_id: str, idempotency_key: str) -> RunStatus | None:
-        row = self._connection.execute(
-            "SELECT payload FROM learning_actions WHERE session_id = ? AND idempotency_key = ?",
-            (session_id, idempotency_key),
-        ).fetchone()
+        with self.engine.connect() as connection:
+            row = connection.execute(
+                text("SELECT payload FROM learning_actions WHERE session_id = :session_id AND idempotency_key = :key"),
+                {"session_id": session_id, "key": idempotency_key},
+            ).mappings().first()
         return RunStatus.model_validate_json(row["payload"]) if row else None
 
     def save_teaching_plan(self, plan: TeachingPlan) -> None:
-        self._connection.execute(
-            "INSERT INTO teaching_plans(id, action_id, payload) VALUES(?, ?, ?)",
-            (plan.id, plan.action_id, plan.model_dump_json()),
-        )
-        self._connection.commit()
+        with self.transaction() as connection:
+            connection.execute(
+                text("INSERT INTO teaching_plans(id, action_id, payload) VALUES(:id, :action_id, :payload)"),
+                {"id": plan.id, "action_id": plan.action_id, "payload": plan.model_dump_json()},
+            )
 
     def get_teaching_plan(self, plan_id: str) -> TeachingPlan | None:
-        row = self._connection.execute("SELECT payload FROM teaching_plans WHERE id = ?", (plan_id,)).fetchone()
+        with self.engine.connect() as connection:
+            row = connection.execute(
+                text("SELECT payload FROM teaching_plans WHERE id = :id"), {"id": plan_id}
+            ).mappings().first()
         return TeachingPlan.model_validate_json(row["payload"]) if row else None
 
     def save_policy_validation(self, result: PolicyValidationResult) -> None:
-        self._connection.execute(
-            "INSERT INTO policy_validation_results(id, action_id, plan_id, payload) VALUES(?, ?, ?, ?)",
-            (result.id, result.action_id, result.plan_id, result.model_dump_json()),
-        )
-        self._connection.commit()
+        with self.transaction() as connection:
+            connection.execute(
+                text("INSERT INTO policy_validation_results(id, action_id, plan_id, payload) VALUES(:id, :action_id, :plan_id, :payload)"),
+                {"id": result.id, "action_id": result.action_id, "plan_id": result.plan_id, "payload": result.model_dump_json()},
+            )
 
     def get_policy_validation(self, action_id: str) -> PolicyValidationResult | None:
-        row = self._connection.execute(
-            "SELECT payload FROM policy_validation_results WHERE action_id = ?", (action_id,)
-        ).fetchone()
+        with self.engine.connect() as connection:
+            row = connection.execute(
+                text("SELECT payload FROM policy_validation_results WHERE action_id = :id"), {"id": action_id}
+            ).mappings().first()
         return PolicyValidationResult.model_validate_json(row["payload"]) if row else None
 
     def count_artifacts_for_action(self, action_id: str) -> int:
-        row = self._connection.execute(
-            "SELECT COUNT(*) AS count FROM lesson_artifacts WHERE json_extract(payload, '$.verification_run_id') = ?",
-            (action_id,),
-        ).fetchone()
-        return int(row["count"])
+        # Payloads are text on both databases; use each dialect's JSON extraction.
+        expression = (
+            "CAST(payload AS JSONB) ->> 'verification_run_id'"
+            if self.engine.dialect.name == "postgresql"
+            else "json_extract(payload, '$.verification_run_id')"
+        )
+        with self.engine.connect() as connection:
+            return int(connection.execute(
+                text(f"SELECT COUNT(*) FROM lesson_artifacts WHERE {expression} = :id"),
+                {"id": action_id},
+            ).scalar_one())
 
     def save_artifact(self, artifact: LessonArtifact) -> None:
-        self._connection.execute(
-            "INSERT OR REPLACE INTO lesson_artifacts(id, session_id, payload) VALUES(?, ?, ?)",
-            (artifact.id, artifact.session_id, artifact.model_dump_json()),
-        )
-        self._connection.commit()
+        with self.transaction() as connection:
+            self._put(connection, "lesson_artifacts", "id", artifact.id, {"session_id": artifact.session_id, "payload": artifact.model_dump_json()})
 
     def get_artifact(self, artifact_id: str) -> LessonArtifact | None:
-        row = self._connection.execute("SELECT payload FROM lesson_artifacts WHERE id = ?", (artifact_id,)).fetchone()
+        with self.engine.connect() as connection:
+            row = connection.execute(text("SELECT payload FROM lesson_artifacts WHERE id = :id"), {"id": artifact_id}).mappings().first()
         return LessonArtifact.model_validate_json(row["payload"]) if row else None
 
     def save_event(self, event: ActionEvent) -> None:
-        self._connection.execute(
-            "INSERT OR REPLACE INTO action_events(id, action_id, sequence, payload) VALUES(?, ?, ?, ?)",
-            (event.id, event.action_id, event.sequence, event.model_dump_json()),
-        )
-        self._connection.commit()
+        with self.transaction() as connection:
+            self._put(connection, "action_events", "id", event.id, {
+                "action_id": event.action_id,
+                "sequence": event.sequence,
+                "payload": event.model_dump_json(),
+            })
 
     def list_events(self, action_id: str) -> list[ActionEvent]:
-        rows = self._connection.execute(
-            "SELECT payload FROM action_events WHERE action_id = ? ORDER BY sequence ASC", (action_id,)
-        ).fetchall()
+        with self.engine.connect() as connection:
+            rows = connection.execute(
+                text("SELECT payload FROM action_events WHERE action_id = :id ORDER BY sequence ASC"), {"id": action_id}
+            ).mappings().all()
         return [ActionEvent.model_validate_json(row["payload"]) for row in rows]

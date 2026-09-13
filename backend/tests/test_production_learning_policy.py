@@ -243,3 +243,16 @@ def test_lesson_reading_and_action_failure_do_not_advance_learner_state(monkeypa
     assert session_after["stateVersion"] == session_before["stateVersion"]
     assert session_after["currentLessonId"] == session_before["currentLessonId"]
     assert learner_after_failure["state_version"] == learner_before_failure["state_version"]
+
+
+def test_action_update_preserves_idempotency_and_policy_records():
+    graph, session = make_graph_and_session()
+    first = post_action(session, graph, key="preserve-command").json()
+    action = main_module.store.get_action(first["runId"])
+    # A later status write can omit the original command key.
+    main_module.store.save_action(action)
+    repeated = post_action(session, graph, key="preserve-command").json()
+    assert repeated["runId"] == first["runId"]
+    validation = main_module.store.get_policy_validation(first["runId"])
+    assert validation.plan_id == first["teachingPlan"]["id"]
+    assert main_module.store.count_artifacts_for_action(first["runId"]) == 1
