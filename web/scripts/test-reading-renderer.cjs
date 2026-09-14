@@ -1,0 +1,34 @@
+// Exercise the actual TSX renderer with a CSS-only stub in Node.
+const fs = require('node:fs');
+const path = require('node:path');
+const Module = require('node:module');
+const assert = require('node:assert/strict');
+const ts = require('typescript');
+const React = require('react');
+const { renderToStaticMarkup } = require('react-dom/server');
+const filename = path.resolve(__dirname, '../components/rich-content.tsx');
+const compiled = ts.transpileModule(fs.readFileSync(filename, 'utf8'), { compilerOptions: { jsx: ts.JsxEmit.ReactJSX, module: ts.ModuleKind.CommonJS, esModuleInterop: true, target: ts.ScriptTarget.ES2022 } }).outputText;
+const renderer = new Module(filename, module);
+renderer.filename = filename;
+renderer.paths = Module._nodeModulePaths(path.dirname(filename));
+const originalRequire = renderer.require.bind(renderer);
+renderer.require = name => name.endsWith('.css') ? new Proxy({}, { get: (_, property) => String(property) }) : originalRequire(name);
+renderer._compile(compiled, filename);
+const { RichContent } = renderer.exports;
+const render = body => renderToStaticMarkup(React.createElement(RichContent, { body, onExplore() {} }));
+
+const math = render('Inline $x^2$\n\n$$\n\\frac{\\partial L}{\\partial w}\n$$');
+assert.match(math, /katex-display/);
+assert.match(math, /<math/);
+assert.match(math, /Explain this equation/);
+assert.doesNotMatch(math, /katex-error/);
+assert.match(render('$\\frac{1$'), /katex-error/);
+assert.doesNotThrow(() => render('Incomplete $\\frac{'));
+const unsafe = render('<script>alert(1)</script>\n\n[unsafe](javascript:alert)\n\n<img src=x onerror=alert(1)>');
+assert.doesNotMatch(unsafe, /<script|<img|href="javascript:/);
+assert.match(render('```details\nShow why\n**A key idea**\n```'), /<details/);
+assert.match(render('```text\nA → B\n    ↓\n    C\n```'), /Copy/);
+assert.match(render('| Symbol | Meaning |\n| --- | --- |\n| x | Input |'), /<table/);
+assert.doesNotMatch(render('The magnitude |x| remains ordinary prose.'), /<table/);
+assert.match(render('Legacy plain text remains readable.'), /Legacy plain text remains readable/);
+console.log('Reading renderer: 10 checks passed.');

@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from datetime import datetime
 from enum import StrEnum
-from typing import Literal
+from typing import Any, Literal
 
 from pydantic import BaseModel, ConfigDict, Field
 
@@ -109,6 +109,10 @@ class ActionContext(ApiModel):
     teaching_profile: ResolvedTeachingProfile
     learner_evidence: LearnerEvidenceProjection
     request_intent: str
+    request_message: str = ""
+    branch_id: str | None = None
+    parent_branch_id: str | None = None
+    anchor: dict[str, Any] | None = None
     requires_edges: list[PolicyEdge] = Field(default_factory=list)
     source_ids: list[str] = Field(default_factory=list)
     source_support_statuses: dict[str, str] = Field(default_factory=dict)

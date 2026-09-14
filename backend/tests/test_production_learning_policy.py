@@ -83,7 +83,18 @@ def test_detected_gap_uses_bridge_while_many_unknowns_offer_a_path():
         f"/v1/learners/{learner_id}/knowledge-graph/events",
         json={"event_type": "misconception_detected", "concept_id": learner_prerequisite["id"]},
     )
-    bridge = post_action(session, graph, concept_index=1).json()["teachingPlan"]
+    # A visualization event must not become authoritative learner evidence.
+    before_admission = post_action(session, graph, concept_index=1).json()["teachingPlan"]
+    assert before_admission["strategy"] == "targeted_diagnostic"
+    admitted = client.post(f"/v1/learners/{learner_id}/evidence", headers={"X-Dev-Learner-Id": learner_id}, json={
+        "evidenceKey": f"gap-{uuid4().hex}", "conceptId": source_prerequisite,
+        "graphId": graph["id"], "graphVersion": graph["version"],
+        "kind": "understanding_check", "outcome": "incorrect", "condition": "independent",
+        "evaluator": "deterministic-test-rubric-v1", "reliability": 0.9,
+        "misconceptionCode": "foundation_gap", "policyVersion": "learner-reducer-v1",
+    })
+    assert admitted.status_code in {200, 201}
+    bridge = post_action(session, graph, concept_index=1, key="after-admission").json()["teachingPlan"]
     assert bridge["strategy"] == "focused_bridge"
     assert bridge["intendedNextAction"] == "complete_bridge_then_return"
 

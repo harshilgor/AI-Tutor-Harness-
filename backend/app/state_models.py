@@ -239,3 +239,12 @@ class NoteRevision(ApiModel):
     body: str
     provenance: dict[str, Any]
     created_at: datetime
+
+
+class BranchContextResponse(ApiModel):
+    """Server-authoritative context used when a sidecar is opened or resumed."""
+
+    branch: BranchRecord
+    ancestors: list[BranchRecord] = Field(default_factory=list)
+    children: list[BranchRecord] = Field(default_factory=list)
+    notes: list[NoteRecord] = Field(default_factory=list)

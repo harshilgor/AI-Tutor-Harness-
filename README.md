@@ -1,5 +1,7 @@
 # AI Tutor Harness
 
+Start the local web interface and tutor API together with `./start-local.ps1` from PowerShell. Opening the web interface alone does not start the Python API. Startup logs are saved in `work/local-runtime`.
+
 An AI learning environment that combines a curriculum graph, persistent learner evidence, adaptive teaching, verification, and assessment.
 
 Start with the [Product and Technical Brief](AI_Tutor_Harness_Product_and_Technical_Brief.md).

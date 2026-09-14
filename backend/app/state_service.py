@@ -12,6 +12,7 @@ from sqlalchemy import Connection, text
 from .models import GraphVersion, utc_now
 from .state_models import (
     BranchCreate,
+    BranchContextResponse,
     BranchRecord,
     BranchUpdate,
     DurableBranchAnchor,
@@ -451,6 +452,50 @@ class LearnerStateService:
         if row is None:
             raise StateServiceError("branch_not_found", "Branch does not exist for this learner.", 404)
         return self._branch_from_row(row)
+
+    def list_branches(self, learner_id: str, session_id: str | None = None, include_closed: bool = False) -> list[BranchRecord]:
+        """List a learner's sidecars in stable tree order."""
+        filters = ["learner_id=:learner_id"]
+        params: dict[str, Any] = {"learner_id": learner_id}
+        if session_id:
+            filters.append("session_id=:session_id")
+            params["session_id"] = session_id
+        if not include_closed:
+            filters.append("lifecycle='open'")
+        with self.store.engine.connect() as connection:
+            rows = connection.execute(text(
+                f"SELECT * FROM branches WHERE {' AND '.join(filters)} ORDER BY created_at ASC"
+            ), params).mappings().all()
+        return [self._branch_from_row(row) for row in rows]
+
+    def get_branch_context(self, learner_id: str, branch_id: str) -> BranchContextResponse:
+        """Return a branch with its parent chain, children, and anchored notes."""
+        branch = self.get_branch(learner_id, branch_id)
+        with self.store.engine.connect() as connection:
+            child_rows = connection.execute(text(
+                "SELECT * FROM branches WHERE learner_id=:learner_id AND parent_branch_id=:parent_id ORDER BY created_at ASC"
+            ), {"learner_id": learner_id, "parent_id": branch_id}).mappings().all()
+            note_rows = connection.execute(text(
+                "SELECT * FROM notes WHERE learner_id=:learner_id AND branch_id=:branch_id AND deleted_at IS NULL ORDER BY updated_at ASC"
+            ), {"learner_id": learner_id, "branch_id": branch_id}).mappings().all()
+
+            ancestors: list[BranchRecord] = []
+            parent_id = branch.parent_branch_id
+            while parent_id:
+                row = connection.execute(text(
+                    "SELECT * FROM branches WHERE id=:id AND learner_id=:learner_id"
+                ), {"id": parent_id, "learner_id": learner_id}).mappings().first()
+                if row is None:
+                    break
+                parent = self._branch_from_row(row)
+                ancestors.insert(0, parent)
+                parent_id = parent.parent_branch_id
+        return BranchContextResponse(
+            branch=branch,
+            ancestors=ancestors,
+            children=[self._branch_from_row(row) for row in child_rows],
+            notes=[self._note_from_row(row) for row in note_rows],
+        )
 
     def update_branch(self, learner_id: str, branch_id: str, request: BranchUpdate) -> BranchRecord:
         with self.store.transaction() as connection:

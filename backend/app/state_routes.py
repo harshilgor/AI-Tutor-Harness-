@@ -10,6 +10,7 @@ from fastapi import APIRouter, Header, HTTPException, Path, Query, Response, sta
 
 from .state_models import (
     BranchCreate,
+    BranchContextResponse,
     BranchRecord,
     BranchUpdate,
     EvidenceAdmissionResponse,
@@ -111,6 +112,19 @@ def build_state_router(store_provider: Any) -> APIRouter:
         authorize(learner_id, x_dev_learner_id)
         return translate(lambda: service().get_branch(learner_id, branch_id))
 
+    @router.get("/learners/{learner_id}/branches", response_model=list[BranchRecord])
+    def list_branches(learner_id: str = learner_path(), session_id: str | None = Query(default=None, max_length=160),
+                      include_closed: bool = Query(default=False),
+                      x_dev_learner_id: str | None = Header(default=None, alias="X-Dev-Learner-Id")) -> list[BranchRecord]:
+        authorize(learner_id, x_dev_learner_id)
+        return service().list_branches(learner_id, session_id, include_closed)
+
+    @router.get("/learners/{learner_id}/branches/{branch_id}/context", response_model=BranchContextResponse)
+    def get_branch_context(branch_id: str, learner_id: str = learner_path(),
+                           x_dev_learner_id: str | None = Header(default=None, alias="X-Dev-Learner-Id")) -> BranchContextResponse:
+        authorize(learner_id, x_dev_learner_id)
+        return translate(lambda: service().get_branch_context(learner_id, branch_id))
+
     @router.patch("/learners/{learner_id}/branches/{branch_id}", response_model=BranchRecord)
     def update_branch(request: BranchUpdate, branch_id: str, learner_id: str = learner_path(),
                       x_dev_learner_id: str | None = Header(default=None, alias="X-Dev-Learner-Id")) -> BranchRecord:
@@ -120,6 +134,13 @@ def build_state_router(store_provider: Any) -> APIRouter:
     @router.post("/learners/{learner_id}/branches/{branch_id}/close", response_model=BranchRecord)
     def close_branch(branch_id: str, learner_id: str = learner_path(),
                      x_dev_learner_id: str | None = Header(default=None, alias="X-Dev-Learner-Id")) -> BranchRecord:
+        authorize(learner_id, x_dev_learner_id)
+        return translate(lambda: service().close_branch(learner_id, branch_id))
+
+    @router.post("/learners/{learner_id}/branches/{branch_id}/cancel", response_model=BranchRecord)
+    def cancel_branch(branch_id: str, learner_id: str = learner_path(),
+                      x_dev_learner_id: str | None = Header(default=None, alias="X-Dev-Learner-Id")) -> BranchRecord:
+        """Cancel an in-flight sidecar using the same idempotent close transition."""
         authorize(learner_id, x_dev_learner_id)
         return translate(lambda: service().close_branch(learner_id, branch_id))
 

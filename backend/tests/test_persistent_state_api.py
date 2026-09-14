@@ -166,6 +166,49 @@ def test_nested_branch_preserves_anchor_and_return_position_and_closes_safely():
     assert closed["returnPosition"] == updated["returnPosition"]
 
 
+def test_branch_context_endpoint_lists_tree_and_cancel_is_safe():
+    learner_id = f"context-{uuid4().hex}"
+    graph = _graph()
+    session = client.post("/v1/sessions", json={"graphId": graph["id"], "learnerId": learner_id}).json()
+    parent = client.post(
+        f"/v1/learners/{learner_id}/branches", headers=_headers(learner_id),
+        json={"sessionId": session["id"], "anchor": {"conceptId": graph["concepts"][0]["id"], "selectedText": "parent passage"}, "returnPosition": {"lessonId": "lesson-parent"}},
+    ).json()
+    child = client.post(
+        f"/v1/learners/{learner_id}/branches", headers=_headers(learner_id),
+        json={"sessionId": session["id"], "parentBranchId": parent["id"], "anchor": {"conceptId": graph["concepts"][0]["id"], "selectedText": "child passage"}, "returnPosition": {"lessonId": "lesson-child"}},
+    ).json()
+    listed = client.get(f"/v1/learners/{learner_id}/branches", headers=_headers(learner_id)).json()
+    assert [item["id"] for item in listed] == [parent["id"], child["id"]]
+    context = client.get(f"/v1/learners/{learner_id}/branches/{child['id']}/context", headers=_headers(learner_id)).json()
+    assert [item["id"] for item in context["ancestors"]] == [parent["id"]]
+    assert context["branch"]["anchor"]["selectedText"] == "child passage"
+    cancelled = client.post(f"/v1/learners/{learner_id}/branches/{child['id']}/cancel", headers=_headers(learner_id)).json()
+    assert cancelled["lifecycle"] == "closed"
+
+
+def test_branch_teaching_action_keeps_parent_session_position():
+    learner_id = f"branch-action-{uuid4().hex}"
+    graph = _graph()
+    session = client.post("/v1/sessions", json={"graphId": graph["id"], "learnerId": learner_id}).json()
+    parent_action = client.post(f"/v1/sessions/{session['id']}/actions", json={"intent": "teach", "conceptId": graph["concepts"][0]["id"], "gear": "Guided"})
+    assert parent_action.status_code == 202, parent_action.text
+    parent_lesson_id = parent_action.json()["lesson"]["id"]
+    before = client.get(f"/v1/sessions/{session['id']}").json()
+    branch = client.post(
+        f"/v1/learners/{learner_id}/branches", headers=_headers(learner_id),
+        json={"sessionId": session["id"], "anchor": {"conceptId": graph["concepts"][0]["id"], "blockId": "explanation", "selectedText": "a focused passage"}, "returnPosition": {"lessonId": parent_lesson_id}},
+    ).json()
+    branch_action = client.post(
+        f"/v1/sessions/{session['id']}/actions",
+        json={"intent": "simplify", "gear": "Guided", "branchId": branch["id"], "conceptId": graph["concepts"][0]["id"], "message": "a focused passage"},
+    )
+    assert branch_action.status_code == 202, branch_action.text
+    after = client.get(f"/v1/sessions/{session['id']}").json()
+    assert after["currentLessonId"] == before["currentLessonId"] == parent_lesson_id
+    assert branch_action.json()["actionContext"]["branchId"] == branch["id"]
+
+
 def test_anchored_note_keeps_revisions_and_soft_delete_is_learner_scoped():
     learner_id = f"note-owner-{uuid4().hex}"
     graph = _graph()

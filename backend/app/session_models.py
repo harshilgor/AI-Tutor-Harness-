@@ -104,6 +104,7 @@ class TeachingActionInput(ApiModel):
     message: str | None = Field(default=None, max_length=4000)
     parent_lesson_id: str | None = None
     parent_block_id: str | None = None
+    branch_id: str | None = None
     anchor: BranchAnchor | None = None
     expected_state_version: int | None = Field(default=None, ge=1)
     curriculum_version: int | None = Field(default=None, ge=1)

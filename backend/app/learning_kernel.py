@@ -5,6 +5,7 @@ from __future__ import annotations
 from uuid import uuid4
 
 from .models import Concept, GraphVersion
+from .model_provider import LessonProvider
 from .policy_models import ActionContext, TeachingPlan, TeachingStrategy
 from .session_models import ConceptTrust, LessonArtifact, LessonBlock, TeachingActionInput, TeachingGear, TeachingIntent
 
@@ -82,6 +83,7 @@ def build_lesson(
     action_id: str,
     context: ActionContext,
     plan: TeachingPlan,
+    lesson_provider: LessonProvider | None = None,
 ) -> LessonArtifact:
     """Render the validated plan. Rendering never creates learner evidence."""
 
@@ -122,19 +124,34 @@ def build_lesson(
             concept_ids=[prerequisite, concept.id], trust=trust, order=0, metadata={"strategy": plan.strategy.value},
         ))
 
-    if not (plan.strategy == TeachingStrategy.targeted_diagnostic and intent != TeachingIntent.check_understanding):
+    if lesson_provider is not None:
+        for generated in lesson_provider.generate(
+            graph=graph, concept=concept, context=context, plan=plan, intent=intent
+        ):
+            blocks.append(LessonBlock(
+                id=f"block_{uuid4().hex[:10]}", kind=generated.kind, heading=generated.heading,
+                body=generated.body, concept_ids=[concept.id], source_ids=list(concept.source_ids),
+                trust=trust, order=len(blocks), metadata={"provider": lesson_provider.provider_name, "planId": plan.id},
+            ))
+    elif not (plan.strategy == TeachingStrategy.targeted_diagnostic and intent != TeachingIntent.check_understanding):
         for representation in plan.representation_sequence:
             blocks.append(_representation_block(representation, graph, concept, plan, len(blocks)))
 
     blocks.append(LessonBlock(
         id=f"block_{uuid4().hex[:10]}", kind="source_note", heading="This is a working scaffold",
-        body="The deterministic local provider exercises policy and lesson flow only. It is not source-backed correctness, model verification, evidence, or calibrated mastery.",
+        body=(
+            "This model-assisted response has no retrieved citations or independent verification. "
+            "It does not create evidence or make a mastery claim."
+            if lesson_provider else
+            "The deterministic local provider exercises policy and lesson flow only. It is not source-backed correctness, model verification, evidence, or calibrated mastery."
+        ),
         concept_ids=[concept.id], source_ids=list(concept.source_ids), trust=trust, order=len(blocks),
-        metadata={"provider": "deterministic_baseline", "qualified": True, "planId": plan.id},
+        metadata={"provider": lesson_provider.provider_name if lesson_provider else "deterministic_baseline", "qualified": True, "planId": plan.id},
     ))
     return LessonArtifact(
         id=f"lesson_{uuid4().hex}", session_id=session_id, concept_id=concept.id, graph_revision=graph_revision,
         gear=TeachingGear(context.teaching_profile.gear), title=concept.title, blocks=blocks,
         next_action="repair_prerequisite" if plan.strategy in {TeachingStrategy.focused_bridge, TeachingStrategy.proposed_learning_path} else "continue" if intent == TeachingIntent.check_understanding else "check_understanding",
-        status="qualified", teaching_plan_id=plan.id, verification_run_id=action_id, generated_by="deterministic_baseline",
+        status="qualified", teaching_plan_id=plan.id, verification_run_id=action_id,
+        generated_by=lesson_provider.provider_name if lesson_provider else "deterministic_baseline",
     )

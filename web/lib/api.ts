@@ -144,6 +144,7 @@ export type LessonArtifact = {
   nextAction?: 'continue' | 'check_understanding' | 'repair_prerequisite' | 'review' | null;
   status: 'pending' | 'approved' | 'qualified' | 'failed' | 'cancelled';
   verificationRunId?: string | null;
+  generatedBy?: string;
 };
 
 export type LearningSession = {
@@ -166,11 +167,28 @@ export type BranchAnchor = {
 export type Branch = {
   id: string;
   sessionId: string;
+  learnerId?: string;
+  parentBranchId?: string | null;
   parentId?: string | null;
-  conceptId: string;
+  conceptId?: string | null;
   anchor: BranchAnchor;
-  status: 'open' | 'collapsed' | 'saved';
+  returnPosition?: { conceptId?: string | null; lessonId?: string | null; blockId?: string | null; offset?: number | null };
+  lifecycle?: 'open' | 'closed';
+  status?: 'open' | 'collapsed' | 'saved' | 'closed';
+  localGear?: Gear | null;
+  summary?: string | null;
+  revision?: number;
   lessonId?: string | null;
+  createdAt?: string;
+  updatedAt?: string;
+  closedAt?: string | null;
+};
+
+export type BranchContext = {
+  branch: Branch;
+  ancestors: Branch[];
+  children: Branch[];
+  notes: NoteRecord[];
 };
 
 export type TeachingIntent =
@@ -184,11 +202,12 @@ export type TeachingIntent =
 
 export type TeachingActionInput = {
   intent: TeachingIntent;
-  conceptId: string;
+  conceptId?: string;
   gear: Gear;
   message?: string | null;
   parentLessonId?: string | null;
   parentBlockId?: string | null;
+  branchId?: string | null;
   anchor?: BranchAnchor | null;
   expectedStateVersion?: number | null;
   curriculumVersion?: number | null;
@@ -243,7 +262,7 @@ export class LearningApiError extends Error {
 
 type ErrorResponse = { code?: string; message?: string; details?: unknown };
 
-function apiBaseUrl(): string {
+export function apiBaseUrl(): string {
   const configured = typeof process !== 'undefined' ? process.env.NEXT_PUBLIC_LEARNING_API_URL : undefined;
   // The local backend is the default while the hosted API is being wired.
   // Deployments can set NEXT_PUBLIC_LEARNING_API_URL to their API origin.
@@ -254,12 +273,18 @@ function url(path: string): string {
   return `${apiBaseUrl()}${path.startsWith('/') ? path : `/${path}`}`;
 }
 
-async function request<T>(path: string, init: RequestInit = {}): Promise<T> {
+export async function request<T>(path: string, init: RequestInit = {}): Promise<T> {
   const headers = new Headers(init.headers);
   headers.set('Accept', 'application/json');
   if (init.body && !headers.has('Content-Type')) headers.set('Content-Type', 'application/json');
 
-  const response = await fetch(url(path), { ...init, headers });
+  let response: Response;
+  try {
+    response = await fetch(url(path), { ...init, headers });
+  } catch (cause) {
+    if (init.signal?.aborted) throw cause;
+    throw new Error('Cannot connect to the tutor service. Your message is still here. Start the local app with start-local.ps1, then try again.');
+  }
   const text = await response.text();
   let body: unknown = null;
   if (text) {
@@ -270,7 +295,8 @@ async function request<T>(path: string, init: RequestInit = {}): Promise<T> {
     }
   }
   if (!response.ok) {
-    const error = body && typeof body === 'object' ? (body as ErrorResponse) : {};
+    const envelope = body && typeof body === 'object' ? body as ErrorResponse & { detail?: ErrorResponse } : {};
+    const error = envelope.detail && typeof envelope.detail === 'object' ? envelope.detail : envelope;
     throw new LearningApiError(response.status, error.code || 'request_failed', error.message || `Learning API request failed (${response.status})`, error.details);
   }
   return body as T;
@@ -363,8 +389,12 @@ export const learningApi = {
     return request<KnowledgeGraph>(`/v1/graphs/${encodeURIComponent(graphId)}${suffix}`, { signal: params.signal });
   },
 
-  createSession(input: { graphId: string; graphRevision?: number; goal?: string }): Promise<LearningSession> {
+  createSession(input: { graphId?: string; topic?: string; gear?: Gear; graphRevision?: number; goal?: string }): Promise<LearningSession> {
     return request<LearningSession>('/v1/sessions', { method: 'POST', body: JSON.stringify(input) });
+  },
+
+  explainLesson(lessonId: string, input: { blockId: string; selectedText: string; mode?: 'explain' | 'simpler' | 'example' | 'symbols' | 'why' }, options?: { signal?: AbortSignal }): Promise<{ blocks: Array<{ heading: string; body: string }> }> {
+    return request(`/v1/lessons/${encodeURIComponent(lessonId)}/explanations`, { method: 'POST', signal: options?.signal, body: JSON.stringify(input) });
   },
 
   teachingAction(sessionId: string, input: TeachingActionInput, options?: { signal?: AbortSignal; idempotencyKey?: string }): Promise<RunStatus> {
@@ -380,16 +410,31 @@ export const learningApi = {
     return request<RunStatus>(`/v1/runs/${encodeURIComponent(runId)}`, { signal: options?.signal });
   },
 
-  openBranch(input: { sessionId: string; parentId?: string | null; conceptId: string; anchor: BranchAnchor }, options?: { idempotencyKey?: string }): Promise<Branch> {
-    return request<Branch>('/v1/branches', {
+  openBranch(input: { learnerId?: string; sessionId: string; parentBranchId?: string | null; conceptId?: string | null; anchor: BranchAnchor; returnPosition?: Branch['returnPosition']; localGear?: Gear | null; summary?: string | null }, options?: { idempotencyKey?: string }): Promise<Branch> {
+    const learnerId = input.learnerId || 'local';
+    return request<Branch>(`/v1/learners/${encodeURIComponent(learnerId)}/branches`, {
       method: 'POST',
       headers: options?.idempotencyKey ? { 'Idempotency-Key': options.idempotencyKey } : undefined,
-      body: JSON.stringify(input),
+      body: JSON.stringify({ sessionId: input.sessionId, parentBranchId: input.parentBranchId, anchor: { ...input.anchor, conceptId: input.conceptId }, returnPosition: input.returnPosition || { lessonId: null, blockId: input.anchor.blockId || null }, localGear: input.localGear, summary: input.summary }),
     });
   },
 
-  updateBranch(branchId: string, input: { status?: Branch['status']; anchor?: BranchAnchor }): Promise<Branch> {
-    return request<Branch>(`/v1/branches/${encodeURIComponent(branchId)}`, { method: 'PATCH', body: JSON.stringify(input) });
+  listBranches(learnerId = 'local', sessionId?: string, includeClosed = false): Promise<Branch[]> {
+    const params = new URLSearchParams({ includeClosed: String(includeClosed) });
+    if (sessionId) params.set('sessionId', sessionId);
+    return request<Branch[]>(`/v1/learners/${encodeURIComponent(learnerId)}/branches?${params}`);
+  },
+
+  getBranchContext(learnerId: string, branchId: string): Promise<BranchContext> {
+    return request<BranchContext>(`/v1/learners/${encodeURIComponent(learnerId)}/branches/${encodeURIComponent(branchId)}/context`);
+  },
+
+  updateBranch(learnerId: string, branchId: string, input: { expectedRevision: number; returnPosition?: Branch['returnPosition']; localGear?: Gear | null; summary?: string | null }): Promise<Branch> {
+    return request<Branch>(`/v1/learners/${encodeURIComponent(learnerId)}/branches/${encodeURIComponent(branchId)}`, { method: 'PATCH', body: JSON.stringify(input) });
+  },
+
+  closeBranch(learnerId: string, branchId: string, cancelled = false): Promise<Branch> {
+    return request<Branch>(`/v1/learners/${encodeURIComponent(learnerId)}/branches/${encodeURIComponent(branchId)}/${cancelled ? 'cancel' : 'close'}`, { method: 'POST' });
   },
 
   submitAttempt(input: AttemptInput, options?: { idempotencyKey?: string }): Promise<AttemptStatus> {
