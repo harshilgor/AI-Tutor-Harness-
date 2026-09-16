@@ -1,7 +1,7 @@
 {
   "name": "forma-desktop",
   "productName": "Forma",
-  "version": "0.1.0",
+  "version": "0.1.0-beta",
   "private": true,
   "description": "Desktop shell for the Forma learning environment",
   "author": "Forma Contributors",

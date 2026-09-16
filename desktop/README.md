@@ -19,7 +19,7 @@ npm run dev
 
 The shell uses the existing API on `127.0.0.1:8000` and opens the web interface on `127.0.0.1:3000`. Set `FORMA_WEB_URL` or `FORMA_API_PORT` when using different local ports.
 
-GitHub Actions builds Windows and macOS artifacts on pull requests and publishes tagged releases. Code signing and notarization credentials must be configured before a public release is advertised as signed.
+GitHub Actions builds unsigned Windows and macOS artifacts for pull requests. The `v0.1.0-beta` release workflow builds signed Windows x64, macOS Intel, and macOS Apple Silicon artifacts only after all signing and notarization secrets are available. See [the release runbook](../docs/RELEASING.md) before creating that tag.
 
 To build the sidecar locally after installing the backend requirements:
 

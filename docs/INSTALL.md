@@ -4,11 +4,11 @@ The desktop installer is published from the repository's GitHub Releases page. D
 
 ## Windows
 
-Download the Windows installer, run it, and launch Forma from the Start menu. The app starts its local learning service automatically. Until code signing is configured, Windows may show a publisher warning; only install an installer downloaded from this repository's GitHub Release.
+Download the signed Windows x64 installer, run it, and launch Forma from the Start menu. The app starts its local learning service automatically. Verify the installer hash against the release's `SHA256SUMS` file before installation.
 
 ## macOS
 
-Download the installer for Apple Silicon or Intel, open it, and drag Forma to Applications. macOS signing and notarization are required before public macOS releases are published.
+Download the signed and notarized installer for Apple Silicon or Intel, open it, and drag Forma to Applications. Verify the installer hash against the release's `SHA256SUMS` file before installation.
 
 ## Development install
 

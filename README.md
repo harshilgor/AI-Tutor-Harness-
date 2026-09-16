@@ -15,7 +15,7 @@ Download installers and read version-specific changes from the repository's **Gi
 
 ### Current release boundary
 
-The current build is a local desktop beta. It supports deterministic teaching without a model key; configure OpenRouter or OpenAI in **Your workspace** for model-backed lessons and quizzes. Public installers are not yet signed or notarized, and hosted accounts, multi-device sync, retrieval-backed source verification, calibrated mastery, and automatic updates are not part of this release.
+The current build is a local desktop beta. It supports deterministic teaching without a model key; configure OpenRouter or OpenAI in **Your workspace** for model-backed lessons and quizzes. The `v0.1.0-beta` release workflow publishes only after Windows signing and macOS signing/notarization checks pass; its operator instructions are in [the release runbook](docs/RELEASING.md). Hosted accounts, multi-device sync, retrieval-backed source verification, calibrated mastery, and automatic updates are not part of this release.
 
 Start the local web interface and tutor API together with `./start-local.ps1` from PowerShell. Opening the web interface alone does not start the Python API. Startup logs are saved in `work/local-runtime`.
 
@@ -37,4 +37,4 @@ The first backend slice is in [`backend/`](backend/). It provides the local Fast
 
 The desktop application is in [`desktop/`](desktop/). It bundles the built web UI and FastAPI sidecar behind a hardened Electron shell. Development setup is in [`desktop/README.md`](desktop/README.md); end-user installation and release behavior are documented in [`docs/INSTALL.md`](docs/INSTALL.md). GitHub Actions packages Windows and macOS artifacts for pull requests and tagged releases.
 
-**Status:** Local desktop beta implementation. Learn/Quiz workflows, persistent learner evidence and review schedules, local data controls, and packaged Windows runtime validation are complete. Code signing, normal interactive uninstall verification, macOS release validation, hosted authentication, and public release publishing remain before a public v1.
+**Status:** Local desktop beta implementation. Learn/Quiz workflows, persistent learner evidence and review schedules, local data controls, packaged Windows runtime validation, and signed-beta release automation are complete. Interactive uninstall verification, release-device validation, hosted authentication, and public v1 publishing remain.

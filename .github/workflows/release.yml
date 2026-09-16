@@ -1,8 +1,8 @@
-name: Publish desktop release
+name: Publish signed Forma beta
 
 on:
   push:
-    tags: ["v*.*.*"]
+    tags: ["v0.1.0-beta"]
 
 permissions:
   contents: write
@@ -10,27 +10,40 @@ permissions:
 jobs:
   package:
     uses: ./.github/workflows/desktop.yml
+    with:
+      require-signing: true
+    secrets: inherit
   release:
     needs: package
     runs-on: ubuntu-latest
     steps:
+      - name: Check out source
+        uses: actions/checkout@v4
       - name: Download packaged installers
         uses: actions/download-artifact@v4
         with:
           path: release-assets
           merge-multiple: true
+      - name: Verify expected beta assets
+        shell: bash
+        run: |
+          test -n "$(find release-assets -type f -name '*Setup.exe' -print -quit)"
+          test -n "$(find release-assets -type f -name '*.dmg' -print -quit)"
+          test -n "$(find release-assets -type f -path '*x64*' -name '*.zip' -print -quit)"
+          test -n "$(find release-assets -type f -path '*arm64*' -name '*.zip' -print -quit)"
       - name: Generate checksums
         shell: bash
         run: |
           find release-assets -type f ! -name SHA256SUMS.txt -print0 \
             | sort -z \
             | xargs -0 sha256sum > release-assets/SHA256SUMS.txt
-      - name: Create GitHub Release
+      - name: Create prerelease
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
           mapfile -t assets < <(find release-assets -type f -print)
           gh release create "${GITHUB_REF_NAME}" "${assets[@]}" \
             --repo "${GITHUB_REPOSITORY}" \
-            --generate-notes \
-            --title "Forma ${GITHUB_REF_NAME}"
+            --title "Forma ${GITHUB_REF_NAME}" \
+            --notes-file docs/releases/v0.1.0-beta.md \
+            --prerelease

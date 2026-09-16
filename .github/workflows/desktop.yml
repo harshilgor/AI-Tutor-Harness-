@@ -3,20 +3,35 @@ name: Desktop build
 on:
   pull_request:
   workflow_call:
-  push:
-    tags: ["v*.*.*"]
+    inputs:
+      require-signing:
+        description: Build a signed and notarized public-release candidate.
+        required: false
+        default: false
+        type: boolean
 
 permissions:
   contents: read
 
 jobs:
   package:
-    name: Package (${{ matrix.os }})
+    name: Package (${{ matrix.label }})
     runs-on: ${{ matrix.os }}
+    env:
+      FORMA_REQUIRE_SIGNING: ${{ inputs.require-signing == true && 'true' || 'false' }}
     strategy:
       fail-fast: false
       matrix:
-        os: [windows-latest, macos-14]
+        include:
+          - os: windows-latest
+            arch: x64
+            label: windows-x64
+          - os: macos-13
+            arch: x64
+            label: macos-intel
+          - os: macos-14
+            arch: arm64
+            label: macos-apple-silicon
     steps:
       - name: Check out source
         uses: actions/checkout@v4
@@ -32,6 +47,54 @@ jobs:
         uses: actions/setup-python@v5
         with:
           python-version: "3.12"
+      - name: Verify beta tag matches packaged version
+        if: inputs.require-signing == true
+        working-directory: desktop
+        run: node scripts/assert-release-version.cjs
+      - name: Materialize Windows signing certificate
+        if: inputs.require-signing == true && runner.os == 'Windows'
+        shell: pwsh
+        env:
+          WINDOWS_CERTIFICATE_PFX_BASE64: ${{ secrets.WINDOWS_CERTIFICATE_PFX_BASE64 }}
+          WINDOWS_CERTIFICATE_PASSWORD: ${{ secrets.WINDOWS_CERTIFICATE_PASSWORD }}
+        run: |
+          if ([string]::IsNullOrWhiteSpace($env:WINDOWS_CERTIFICATE_PFX_BASE64) -or [string]::IsNullOrWhiteSpace($env:WINDOWS_CERTIFICATE_PASSWORD)) {
+            Write-Error 'Missing WINDOWS_CERTIFICATE_PFX_BASE64 or WINDOWS_CERTIFICATE_PASSWORD GitHub Actions secret.'
+            exit 1
+          }
+          $certificatePath = Join-Path $env:RUNNER_TEMP 'forma-windows-signing.pfx'
+          [System.IO.File]::WriteAllBytes($certificatePath, [System.Convert]::FromBase64String($env:WINDOWS_CERTIFICATE_PFX_BASE64))
+          "WINDOWS_CERTIFICATE_FILE=$certificatePath" | Out-File -FilePath $env:GITHUB_ENV -Append -Encoding utf8
+      - name: Import macOS signing certificate
+        if: inputs.require-signing == true && runner.os == 'macOS'
+        shell: bash
+        env:
+          MACOS_CERTIFICATE_P12_BASE64: ${{ secrets.MACOS_CERTIFICATE_P12_BASE64 }}
+          MACOS_CERTIFICATE_PASSWORD: ${{ secrets.MACOS_CERTIFICATE_PASSWORD }}
+        run: |
+          if [[ -z "$MACOS_CERTIFICATE_P12_BASE64" || -z "$MACOS_CERTIFICATE_PASSWORD" ]]; then
+            echo '::error::Missing MACOS_CERTIFICATE_P12_BASE64 or MACOS_CERTIFICATE_PASSWORD GitHub Actions secret.'
+            exit 1
+          fi
+          certificate_path="$RUNNER_TEMP/forma-macos-signing.p12"
+          keychain_path="$RUNNER_TEMP/forma-signing.keychain-db"
+          echo "$MACOS_CERTIFICATE_P12_BASE64" | base64 --decode > "$certificate_path"
+          security create-keychain -p "$MACOS_CERTIFICATE_PASSWORD" "$keychain_path"
+          security set-keychain-settings -lut 21600 "$keychain_path"
+          security unlock-keychain -p "$MACOS_CERTIFICATE_PASSWORD" "$keychain_path"
+          security import "$certificate_path" -k "$keychain_path" -P "$MACOS_CERTIFICATE_PASSWORD" -T /usr/bin/codesign -T /usr/bin/security
+          security set-key-partition-list -S apple-tool:,apple:,codesign: -s -k "$MACOS_CERTIFICATE_PASSWORD" "$keychain_path"
+          security list-keychain -d user -s "$keychain_path"
+          echo 'MACOS_CERTIFICATE_IMPORTED=true' >> "$GITHUB_ENV"
+      - name: Verify signing configuration
+        if: inputs.require-signing == true
+        working-directory: desktop
+        env:
+          WINDOWS_CERTIFICATE_PASSWORD: ${{ secrets.WINDOWS_CERTIFICATE_PASSWORD }}
+          APPLE_ID: ${{ secrets.APPLE_ID }}
+          APPLE_APP_SPECIFIC_PASSWORD: ${{ secrets.APPLE_APP_SPECIFIC_PASSWORD }}
+          APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
+        run: node scripts/assert-release-signing.cjs
       - name: Build web application
         working-directory: web
         run: npm ci && npm run build
@@ -44,7 +107,25 @@ jobs:
         run: npm ci
       - name: Package desktop application
         working-directory: desktop
-        run: npm run make
+        run: npm run make -- --arch ${{ matrix.arch }}
+      - name: Verify Windows signatures
+        if: inputs.require-signing == true && runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          $installers = Get-ChildItem 'desktop/out/make' -Recurse -Filter '*Setup.exe'
+          if ($installers.Count -eq 0) { throw 'No Windows installer was produced.' }
+          $installers | ForEach-Object {
+            $signature = Get-AuthenticodeSignature $_.FullName
+            if ($signature.Status -ne 'Valid') { throw "Invalid signature on $($_.FullName): $($signature.Status)" }
+          }
+      - name: Verify macOS signing and notarization
+        if: inputs.require-signing == true && runner.os == 'macOS'
+        shell: bash
+        run: |
+          app_path="$(find desktop/out -type d -name 'Forma.app' -print -quit)"
+          test -n "$app_path"
+          codesign --verify --deep --strict --verbose=2 "$app_path"
+          xcrun stapler validate "$app_path"
       - name: Smoke test bundled sidecar lifecycle
         if: runner.os == 'Windows'
         shell: pwsh
@@ -52,6 +133,6 @@ jobs:
       - name: Upload desktop artifacts
         uses: actions/upload-artifact@v4
         with:
-          name: forma-${{ matrix.os }}
+          name: forma-${{ matrix.label }}
           path: desktop/out/make/**
           if-no-files-found: error
