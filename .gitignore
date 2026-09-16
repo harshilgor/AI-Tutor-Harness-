@@ -3,6 +3,9 @@
 **/.next/
 **/.vinext/
 **/dist/
+desktop/out/
+desktop/make/
+desktop/.vite/
 **/.wrangler/
 
 # Python caches and local runtime data
@@ -12,6 +15,8 @@
 **/pytest-cache-files-*/
 .venv/
 backend/data/*.db
+backend/build/
+backend/data/materials/
 
 # Local configuration and nested repository backup
 .env

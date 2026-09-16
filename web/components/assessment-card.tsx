@@ -1,0 +1,49 @@
+"use client";
+
+import { useState } from 'react';
+import { Button } from '@/components/ui/button';
+import { RichContent } from './rich-content';
+import type { Attempt, Presentation } from '@/lib/learning-workflows';
+import styles from './quiz.module.css';
+
+export function AssessmentCard({ item, attempt, busy, onAnswer, onHint, onChallenge }: {
+  item: Presentation; attempt?: Attempt; busy: boolean;
+  onAnswer: (response: { response: string; selectedIds: string[]; outcome: 'answer' | 'dont_know' | 'skip' }) => void;
+  onHint: () => void; onChallenge: (reason: string) => void;
+}) {
+  const [draft] = useState<{response?: string; selected?: string[]}>(() => { try { return JSON.parse(localStorage.getItem(`quiz-draft:${item.id}`) || '{}'); } catch { return {}; } });
+  const [response, setResponse] = useState(draft.response || '');
+  const [selected, setSelected] = useState<string[]>(draft.selected || []);
+  const [reason, setReason] = useState('');
+  const [challenging, setChallenging] = useState(false);
+  function save(next: string, choices: string[]) {
+    setResponse(next); setSelected(choices);
+    try { localStorage.setItem(`quiz-draft:${item.id}`, JSON.stringify({ response: next, selected: choices })); } catch { /* Draft remains in memory. */ }
+  }
+  return <article className={styles.card} aria-label="Quiz question">
+    <span className={styles.meta}>{item.difficulty} · {item.kind === 'multiple' ? 'Select all correct answers · exact match scoring' : item.kind === 'short' ? 'Explain your reasoning' : 'Select one answer'}</span>
+    <RichContent body={item.stem} />
+    <fieldset disabled={busy || !!attempt} className={styles.responses}>
+      <legend className="sr-only">Your answer</legend>
+      {item.kind === 'short' ? <textarea aria-label="Your reasoning" rows={5} value={response} onChange={e => save(e.target.value, selected)} maxLength={6000} placeholder="Explain how you reached your answer…" /> : item.options.map(option => <label key={option.id} className={styles.option}>
+        <input type={item.kind === 'single' ? 'radio' : 'checkbox'} name={`answer-${item.id}`} checked={(attempt?.selectedIds || selected).includes(option.id)} onChange={() => save(response, item.kind === 'single' ? [option.id] : selected.includes(option.id) ? selected.filter(id => id !== option.id) : [...selected, option.id])} />
+        <RichContent body={option.label} />
+      </label>)}
+    </fieldset>
+    {item.hints.map((hint, i) => <div className={styles.hint} key={i}><strong>Hint {i + 1}</strong><RichContent body={hint} /></div>)}
+    {!attempt ? <div className={styles.actions}>
+      <Button disabled={busy || (item.kind === 'short' ? !response.trim() : !selected.length)} onClick={() => onAnswer({ response, selectedIds: selected, outcome: 'answer' })}>Check answer</Button>
+      <Button variant="outline" disabled={busy} onClick={() => onAnswer({ response: '', selectedIds: [], outcome: 'dont_know' })}>I don’t know</Button>
+      <Button variant="ghost" disabled={busy || item.hints.length >= 3} onClick={onHint}>Hint</Button>
+      <Button variant="ghost" disabled={busy} onClick={() => onAnswer({ response: '', selectedIds: [], outcome: 'skip' })}>Skip</Button>
+    </div> : <section className={styles.feedback} aria-label="Answer feedback">
+      <h3>{attempt.status === 'uncertain' ? 'Needs clarification' : attempt.status === 'skipped' ? 'Skipped' : attempt.score === 1 ? 'Correct' : attempt.score === 0 ? 'Another look' : 'Partly correct'}</h3>
+      {attempt.assisted && <p className={styles.meta}>Answered with help</p>}
+      <RichContent body={attempt.feedback} />
+      <details open><summary>Reasoning</summary><RichContent body={attempt.solution} /></details>
+      {attempt.conceptState && <p className={styles.meta}>Concept evidence: {attempt.conceptState.replaceAll('_', ' ')} · Not a calibrated mastery estimate</p>}
+      <Button variant="ghost" onClick={() => setChallenging(!challenging)}>Flag question or feedback</Button>
+      {challenging && <div><textarea aria-label="Why is this question or feedback unclear?" value={reason} onChange={e => setReason(e.target.value)} maxLength={2000} /><Button disabled={busy || reason.trim().length < 5} onClick={() => { onChallenge(reason); setChallenging(false); }}>Submit for review</Button></div>}
+    </section>}
+  </article>;
+}

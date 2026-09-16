@@ -1,5 +1,22 @@
 # AI Tutor Harness
 
+## Forma desktop beta
+
+Forma is a local-first AI learning environment. The desktop application starts the bundled tutor service on your device, keeps learner state locally, and provides a shared Ask/Learn chat with a connected Quiz workspace.
+
+Download installers and read version-specific changes from the repository's **GitHub Releases** page. See [installation instructions](docs/INSTALL.md), [release notes](CHANGELOG.md), and the [desktop release plan](outputs/Desktop_Application_and_GitHub_Release_Plan.md).
+
+### What is included
+
+- Guided Learn conversations with Quick, Guided, and Deep teaching gears.
+- Quiz generation and evaluation that records assessment evidence through the persistent learner-state service.
+- Local SQLite learner data, export/delete controls, review scheduling, and optional desktop review reminders.
+- A bundled Electron application with a loopback-only FastAPI sidecar, encrypted local provider-key storage, first-run setup, and automatic sidecar recovery.
+
+### Current release boundary
+
+The current build is a local desktop beta. It supports deterministic teaching without a model key; configure OpenRouter or OpenAI in **Your workspace** for model-backed lessons and quizzes. Public installers are not yet signed or notarized, and hosted accounts, multi-device sync, retrieval-backed source verification, calibrated mastery, and automatic updates are not part of this release.
+
 Start the local web interface and tutor API together with `./start-local.ps1` from PowerShell. Opening the web interface alone does not start the Python API. Startup logs are saved in `work/local-runtime`.
 
 An AI learning environment that combines a curriculum graph, persistent learner evidence, adaptive teaching, verification, and assessment.
@@ -18,4 +35,6 @@ The first website slice is in [`web/`](web/). See [`web/README.md`](web/README.m
 
 The first backend slice is in [`backend/`](backend/). It provides the local FastAPI graph flow, SQLite persistence, typed graph records, and the deterministic provider boundary described in [`backend/README.md`](backend/README.md).
 
-**Status:** Design baseline plus interactive website, learning-kernel action flow, learner-wide graph projection, and persistent learner-state/evidence infrastructure, version 0.5, 12 September 2026. The backend supports PostgreSQL with migrated SQLite local tests and runs a deterministic teaching path without an API key; source-backed model teaching, calibrated knowledge tracing, authentication, and hosted publishing remain next.
+The desktop application is in [`desktop/`](desktop/). It bundles the built web UI and FastAPI sidecar behind a hardened Electron shell. Development setup is in [`desktop/README.md`](desktop/README.md); end-user installation and release behavior are documented in [`docs/INSTALL.md`](docs/INSTALL.md). GitHub Actions packages Windows and macOS artifacts for pull requests and tagged releases.
+
+**Status:** Local desktop beta implementation. Learn/Quiz workflows, persistent learner evidence and review schedules, local data controls, and packaged Windows runtime validation are complete. Code signing, normal interactive uninstall verification, macOS release validation, hosted authentication, and public release publishing remain before a public v1.

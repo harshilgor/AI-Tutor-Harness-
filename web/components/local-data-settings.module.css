@@ -1,0 +1,5 @@
+.body { display: grid; gap: 18px; }
+.callout { display: flex; gap: 10px; align-items: flex-start; padding: 13px; border: 1px solid #e0e6da; border-radius: 9px; background: #f6f8f3; color: #5f6c59; font-size: 13px; line-height: 1.55; }
+.callout svg { flex: 0 0 auto; margin-top: 2px; color: #718568; }
+.actions { display: flex; flex-wrap: wrap; gap: 10px; }
+.message { margin: 0; color: #687761; font-size: 13px; }

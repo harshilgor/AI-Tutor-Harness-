@@ -1,12 +1,13 @@
 from __future__ import annotations
 
 import json
+import os
 from typing import Literal
 from uuid import uuid4
 
 from fastapi import Depends, FastAPI, Header, HTTPException, status
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import StreamingResponse
+from fastapi.responses import JSONResponse, StreamingResponse
 from pydantic import BaseModel, Field
 
 from .database import database_url
@@ -44,15 +45,28 @@ from .state_service import LearnerStateService
 from .storage import Store
 from .material_routes import build_material_router
 from .context_service import canonical_evidence
+from .learning_routes import build_learning_router
+from .privacy_routes import build_privacy_router
 
 app = FastAPI(title="AI Tutor Harness API", version="0.1.0")
+local_web_origin = os.getenv("FORMA_WEB_ORIGIN", "http://127.0.0.1:3000")
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["http://127.0.0.1:3000", "http://localhost:3000"],
+    allow_origins=[local_web_origin, "http://127.0.0.1:3000", "http://localhost:3000"],
     allow_methods=["*"],
     allow_headers=["*"],
     allow_credentials=True,
 )
+
+
+@app.middleware("http")
+async def local_desktop_auth(request, call_next):
+    """Protect a desktop-started loopback service without affecting dev/API use."""
+    token = os.getenv("FORMA_API_TOKEN")
+    if token and request.method != "OPTIONS" and request.url.path != "/health":
+        if request.headers.get("X-Forma-Desktop-Token") != token:
+            return JSONResponse(status_code=401, content={"code": "desktop_auth_required", "message": "The local desktop session is not authorized."})
+    return await call_next(request)
 store = Store(database_url())
 generator = GraphGenerator()
 lesson_provider = configured_lesson_provider()
@@ -68,6 +82,8 @@ def get_store() -> Store:
 app.include_router(build_learner_graph_router(get_store))
 app.include_router(build_state_router(get_store))
 app.include_router(build_material_router(get_store, lambda: lesson_provider))
+app.include_router(build_learning_router(get_store, lambda: lesson_provider))
+app.include_router(build_privacy_router(get_store))
 
 
 @app.get("/health")

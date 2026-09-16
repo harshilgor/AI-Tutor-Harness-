@@ -1,0 +1,155 @@
+"""Local authorized workflow endpoints; jobs survive process and page restarts."""
+from fastapi import APIRouter, BackgroundTasks, Depends, Header, HTTPException
+import logging
+from .assessment_models import AnswerCommand, ChallengeCommand, JourneyCommand, QuizCreate, RevisionCommand
+from .material_routes import material_owner
+from .material_service import MaterialService, problem
+from .model_provider import ModelProviderError
+from .workflow_store import WorkflowStore, uid
+from .quiz_service import QuizService
+from .journey_service import JourneyService
+
+
+def run_job(store, provider, job_id):
+    records = WorkflowStore(store)
+    job = records.claim(job_id)
+    if not job:
+        return
+    owner, target, payload, kind = job["owner_id"], job["target_id"], job["payload"], job["kind"]
+    quiz, journey = QuizService(store, provider), JourneyService(store, provider)
+    try:
+        prepared = None
+        if kind == "journey":
+            prepared = journey.prepare(owner, target, JourneyCommand.model_validate(payload))
+        elif kind == "next":
+            prepared = quiz.prepare(owner, target, payload["expected_revision"])
+        elif kind == "answer":
+            prepared = quiz.grade(owner, target, AnswerCommand.model_validate(payload))
+        with store.transaction() as conn:
+            if kind == "create":
+                created = quiz.create(owner, QuizCreate.model_validate(payload), conn, uid("quiz"))
+                result = {"quizId": created["id"]}
+            elif kind == "journey":
+                result = journey.commit(conn, owner, prepared)
+            elif kind == "next":
+                result = quiz.commit_prepared(conn, owner, prepared)
+            elif kind == "answer":
+                result = quiz.commit_grade(conn, owner, prepared)
+            elif kind == "hint":
+                result = quiz.hint(owner, target, conn)
+            elif kind == "retry":
+                result = quiz.retry(conn, owner, target, payload["expected_revision"])
+            elif kind == "resume":
+                current = records.read(owner, target, "quiz", conn)
+                current["status"] = "in_progress" if current["current"] else "ready"
+                records.put(conn, owner, "quiz", current, expected=payload["expected_revision"])
+                result = {"quizId": target}
+            elif kind == "pause":
+                current = records.read(owner, target, "quiz", conn)
+                current["status"] = "paused"
+                records.put(conn, owner, "quiz", current, expected=payload["expected_revision"])
+                result = {"quizId": target}
+            elif kind == "challenge":
+                attempt = records.read(owner, target, "attempt", conn)
+                result = quiz.challenge(conn, owner, attempt["presentationId"], payload["reason"])
+            elif kind == "flag":
+                result = quiz.challenge(conn, owner, target, payload["reason"])
+            else:
+                raise ValueError("Unsupported job")
+            records.finish(conn, job, result)
+    except Exception as exc:
+        # Do not log learner answers, source passages, or provider payloads.
+        logging.getLogger(__name__).warning("Learning job %s failed (%s)", job["id"], type(exc).__name__)
+        message = str(exc) if isinstance(exc, ModelProviderError) else (exc.detail.get("message", "Please reload and try again.") if isinstance(exc, HTTPException) and isinstance(exc.detail, dict) else "This operation could not be completed. Reload and retry; your previous work is saved.")
+        try:
+            with store.transaction() as conn:
+                records.finish(conn, job, {"message": message}, "failed")
+        except HTTPException:
+            pass  # Cancellation or a replacement worker already owns the outcome.
+
+
+def build_learning_router(store_provider, provider_getter):
+    router = APIRouter(prefix="/v1")
+
+    def enqueue(tasks, db, owner, target, kind, payload, key):
+        job = WorkflowStore(db).enqueue(owner, target, kind, payload, key)
+        tasks.add_task(run_job, db, provider_getter(), job["id"])
+        return job
+
+    @router.get("/learning-jobs/{job_id}")
+    def get_job(job_id: str, tasks: BackgroundTasks, owner=Depends(material_owner), db=Depends(store_provider)):
+        job = WorkflowStore(db).job(owner, job_id)
+        if job["status"] in {"queued", "running"}:
+            tasks.add_task(run_job, db, provider_getter(), job_id)
+        return job
+
+    @router.post("/learning-jobs/{job_id}/cancel")
+    def cancel_job(job_id: str, owner=Depends(material_owner), db=Depends(store_provider)):
+        return WorkflowStore(db).cancel(owner, job_id)
+
+    @router.get("/sessions/{sid}/journey")
+    def get_journey(sid: str, owner=Depends(material_owner), db=Depends(store_provider)):
+        return JourneyService(db, provider_getter()).get(owner, sid)
+
+    @router.post("/sessions/{sid}/journey", status_code=202)
+    def journey(sid: str, command: JourneyCommand, tasks: BackgroundTasks, owner=Depends(material_owner), db=Depends(store_provider), key: str = Header(alias="Idempotency-Key", min_length=1, max_length=200)):
+        MaterialService(db).session(owner, sid)
+        return enqueue(tasks, db, owner, sid, "journey", command.model_dump(mode="json"), key)
+
+    @router.get("/quizzes")
+    def listing(owner=Depends(material_owner), db=Depends(store_provider)):
+        records = WorkflowStore(db)
+        return {"quizzes": [{k: q[k] for k in ("id", "title", "sessionId", "status", "count")} for q in records.listing(owner, "quiz")]}
+
+    @router.post("/quizzes", status_code=202)
+    def create(command: QuizCreate, tasks: BackgroundTasks, owner=Depends(material_owner), db=Depends(store_provider), key: str = Header(alias="Idempotency-Key", min_length=1, max_length=200)):
+        MaterialService(db).session(owner, command.session_id)
+        return enqueue(tasks, db, owner, command.session_id, "create", command.model_dump(mode="json"), key)
+
+    @router.get("/quizzes/{qid}")
+    @router.get("/quizzes/{qid}/results")
+    def get_quiz(qid: str, owner=Depends(material_owner), db=Depends(store_provider)):
+        return QuizService(db, provider_getter()).public(owner, qid)
+
+    @router.post("/quizzes/{qid}/next", status_code=202)
+    def next_question(qid: str, command: RevisionCommand, tasks: BackgroundTasks, owner=Depends(material_owner), db=Depends(store_provider), key: str = Header(alias="Idempotency-Key", min_length=1, max_length=200)):
+        WorkflowStore(db).read(owner, qid, "quiz")
+        return enqueue(tasks, db, owner, qid, "next", command.model_dump(), key)
+
+    @router.post("/quizzes/{qid}/attempts", status_code=202)
+    def answer(qid: str, command: AnswerCommand, tasks: BackgroundTasks, owner=Depends(material_owner), db=Depends(store_provider), key: str = Header(alias="Idempotency-Key", min_length=1, max_length=200)):
+        WorkflowStore(db).read(owner, qid, "quiz")
+        WorkflowStore(db).read(owner, command.presentation_id, "presentation")
+        return enqueue(tasks, db, owner, qid, "answer", command.model_dump(), key)
+
+    @router.post("/presentations/{pid}/hints", status_code=202)
+    def hint(pid: str, tasks: BackgroundTasks, owner=Depends(material_owner), db=Depends(store_provider), key: str = Header(alias="Idempotency-Key", min_length=1, max_length=200)):
+        WorkflowStore(db).read(owner, pid, "presentation")
+        return enqueue(tasks, db, owner, pid, "hint", {}, key)
+
+    @router.post("/quizzes/{qid}/pause", status_code=202)
+    def pause(qid: str, command: RevisionCommand, tasks: BackgroundTasks, owner=Depends(material_owner), db=Depends(store_provider), key: str = Header(alias="Idempotency-Key", min_length=1, max_length=200)):
+        WorkflowStore(db).read(owner, qid, "quiz")
+        return enqueue(tasks, db, owner, qid, "pause", command.model_dump(), key)
+
+    @router.post("/quizzes/{qid}/resume", status_code=202)
+    def resume(qid: str, command: RevisionCommand, tasks: BackgroundTasks, owner=Depends(material_owner), db=Depends(store_provider), key: str = Header(alias="Idempotency-Key", min_length=1, max_length=200)):
+        WorkflowStore(db).read(owner, qid, "quiz")
+        return enqueue(tasks, db, owner, qid, "resume", command.model_dump(), key)
+
+    @router.post("/quizzes/{qid}/retry", status_code=202)
+    def retry(qid: str, command: RevisionCommand, tasks: BackgroundTasks, owner=Depends(material_owner), db=Depends(store_provider), key: str = Header(alias="Idempotency-Key", min_length=1, max_length=200)):
+        WorkflowStore(db).read(owner, qid, "quiz")
+        return enqueue(tasks, db, owner, qid, "retry", command.model_dump(), key)
+
+    @router.post("/attempts/{aid}/challenges", status_code=202)
+    def challenge(aid: str, command: ChallengeCommand, tasks: BackgroundTasks, owner=Depends(material_owner), db=Depends(store_provider), key: str = Header(alias="Idempotency-Key", min_length=1, max_length=200)):
+        WorkflowStore(db).read(owner, aid, "attempt")
+        return enqueue(tasks, db, owner, aid, "challenge", command.model_dump(), key)
+
+    @router.post("/presentations/{pid}/challenges", status_code=202)
+    def flag(pid: str, command: ChallengeCommand, tasks: BackgroundTasks, owner=Depends(material_owner), db=Depends(store_provider), key: str = Header(alias="Idempotency-Key", min_length=1, max_length=200)):
+        WorkflowStore(db).read(owner, pid, "presentation")
+        return enqueue(tasks, db, owner, pid, "flag", command.model_dump(), key)
+
+    return router

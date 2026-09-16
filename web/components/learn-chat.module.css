@@ -81,3 +81,9 @@
 .tableWrap tr:last-child td { border-bottom: 0; }
 @media (max-width: 600px) { .page { width: calc(100% - 32px); padding-top: 30px; } .empty { padding-bottom: 16vh; } .break { display: none; } .composerBottom span { max-width: 220px; } .selection { left: 16px; right: 16px; transform: none; justify-content: center; } .reading article, .lessonArticle { font-size: 16px; } .studyPanel { top: 10px; right: 10px; bottom: 10px; width: calc(100vw - 20px); padding: 22px; } .lessonActions { align-items: flex-start; flex-direction: column; } }
 @media (prefers-reduced-motion: reduce) { .spinner { animation: none; } }
+.journey { width: min(100%, 780px); margin: 1.5rem auto; padding: 1.25rem; border: 1px solid var(--border); border-radius: 12px; font-size: 1rem; }
+.journey summary { cursor: pointer; font-weight: 600; }
+.journey ol { padding-left: 1.5rem; margin: 1rem 0; }
+.journey li { margin: .75rem 0; }
+.journey li[aria-current=step] { color: var(--primary); }
+.journey p { color: var(--muted-foreground); font-size: .875rem; line-height: 1.6; }

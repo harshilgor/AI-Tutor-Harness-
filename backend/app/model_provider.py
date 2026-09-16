@@ -105,6 +105,11 @@ Use 1-3 blocks. The only permitted kind values are explanation and example. Do n
         return self._complete(prompt, 1800)
 
     def _complete(self, prompt: str, max_tokens: int) -> list[GeneratedBlock]:
+        parsed = self.complete_json(prompt, max_tokens, allow_text=True)
+        return self._parse_blocks(parsed)
+
+    def complete_json(self, prompt: str, max_tokens: int = 4000, *, allow_text: bool = False) -> dict:
+        """Shared provider transport; assessment callers require strict JSON."""
         headers = {
             "Authorization": f"Bearer {self.api_key}",
             "Content-Type": "application/json",
@@ -183,7 +188,7 @@ Use 1-3 blocks. The only permitted kind values are explanation and example. Do n
                 # Some OpenAI-compatible models ignore the JSON instruction but
                 # return a perfectly useful lesson. Preserve that answer rather
                 # than making the learner see a provider error.
-                if isinstance(content, str) and len(content.strip()) >= 80:
+                if allow_text and isinstance(content, str) and len(content.strip()) >= 80:
                     parsed = {"blocks": [{"kind": "explanation", "heading": "Lesson", "body": content.strip()}]}
                 else:
                     raise
@@ -203,6 +208,12 @@ Use 1-3 blocks. The only permitted kind values are explanation and example. Do n
             detail = str(exc).strip()
             suffix = f": {detail[:160]}" if detail else ""
             raise ModelProviderError(f"{service} returned a response the app could not use ({type(exc).__name__}{suffix}). Try again or choose another model.") from exc
+        if not isinstance(parsed, dict):
+            raise ModelProviderError("The model must return a JSON object.")
+        return parsed
+
+    @staticmethod
+    def _parse_blocks(parsed: dict) -> list[GeneratedBlock]:
         blocks = parsed.get("blocks") if isinstance(parsed, dict) else None
         if not isinstance(blocks, list) or not 1 <= len(blocks) <= 16:
             raise ModelProviderError("The model returned an invalid lesson structure. Please try again.")

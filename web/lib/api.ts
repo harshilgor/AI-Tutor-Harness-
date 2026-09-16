@@ -264,9 +264,17 @@ type ErrorResponse = { code?: string; message?: string; details?: unknown };
 
 export function apiBaseUrl(): string {
   const configured = typeof process !== 'undefined' ? process.env.NEXT_PUBLIC_LEARNING_API_URL : undefined;
+  const desktop = typeof window === 'undefined'
+    ? undefined
+    : (window as Window & { formaDesktop?: { apiBaseUrl?: string } }).formaDesktop?.apiBaseUrl;
   // The local backend is the default while the hosted API is being wired.
   // Deployments can set NEXT_PUBLIC_LEARNING_API_URL to their API origin.
-  return (configured || 'http://127.0.0.1:8000').replace(/\/$/, '');
+  return (configured || desktop || 'http://127.0.0.1:8000').replace(/\/$/, '');
+}
+
+function desktopToken(): string | undefined {
+  if (typeof window === 'undefined') return undefined;
+  return (window as Window & { formaDesktop?: { apiToken?: string } }).formaDesktop?.apiToken;
 }
 
 function url(path: string): string {
@@ -276,6 +284,8 @@ function url(path: string): string {
 export async function request<T>(path: string, init: RequestInit = {}): Promise<T> {
   const headers = new Headers(init.headers);
   headers.set('Accept', 'application/json');
+  const token = desktopToken();
+  if (token) headers.set('X-Forma-Desktop-Token', token);
   if (init.body && !headers.has('Content-Type')) headers.set('Content-Type', 'application/json');
 
   let response: Response;
@@ -345,6 +355,13 @@ export type BaselineGraph = {
 export type BaselineGraphResponse = {
   job: { id: string; scope_id: string; status: string; stage: string; progress: number; graph_id?: string | null; warnings: string[] };
   graph?: BaselineGraph | null;
+};
+
+export type LocalDataExport = {
+  format: 'forma-local-export';
+  version: number;
+  learner_id: string;
+  tables: Record<string, Array<Record<string, unknown>>>;
 };
 
 export const learningApi = {
@@ -459,5 +476,13 @@ export const learningApi = {
 
   updateNote(noteId: string, body: string, version: number): Promise<NoteRecord> {
     return request<NoteRecord>(`/v1/notes/${encodeURIComponent(noteId)}`, { method: 'PATCH', body: JSON.stringify({ body, version }) });
+  },
+
+  exportLocalData(learnerId = 'local'): Promise<LocalDataExport> {
+    return request<LocalDataExport>(`/v1/learners/${encodeURIComponent(learnerId)}/export`);
+  },
+
+  deleteLocalData(learnerId = 'local'): Promise<{ deleted: Record<string, number>; total: number }> {
+    return request<{ deleted: Record<string, number>; total: number }>(`/v1/learners/${encodeURIComponent(learnerId)}/data`, { method: 'DELETE' });
   },
 };

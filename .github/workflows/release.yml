@@ -1,0 +1,36 @@
+name: Publish desktop release
+
+on:
+  push:
+    tags: ["v*.*.*"]
+
+permissions:
+  contents: write
+
+jobs:
+  package:
+    uses: ./.github/workflows/desktop.yml
+  release:
+    needs: package
+    runs-on: ubuntu-latest
+    steps:
+      - name: Download packaged installers
+        uses: actions/download-artifact@v4
+        with:
+          path: release-assets
+          merge-multiple: true
+      - name: Generate checksums
+        shell: bash
+        run: |
+          find release-assets -type f ! -name SHA256SUMS.txt -print0 \
+            | sort -z \
+            | xargs -0 sha256sum > release-assets/SHA256SUMS.txt
+      - name: Create GitHub Release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          mapfile -t assets < <(find release-assets -type f -print)
+          gh release create "${GITHUB_REF_NAME}" "${assets[@]}" \
+            --repo "${GITHUB_REPOSITORY}" \
+            --generate-notes \
+            --title "Forma ${GITHUB_REF_NAME}"

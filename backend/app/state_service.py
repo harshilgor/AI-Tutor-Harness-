@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+from contextlib import nullcontext
 from datetime import datetime, timedelta, timezone
 from typing import Any
 from uuid import uuid4
@@ -179,10 +180,10 @@ class LearnerStateService:
             ), {"learner_id": learner_id, "limit": limit}).mappings().all()
         return [self._evidence_from_row(row) for row in rows]
 
-    def admit_evidence(self, learner_id: str, request: EvidenceCreate) -> EvidenceAdmissionResponse:
+    def admit_evidence(self, learner_id: str, request: EvidenceCreate, *, connection: Connection | None = None) -> EvidenceAdmissionResponse:
         graph = self.store.get_graph(request.graph_id)
         now = utc_now()
-        with self.store.transaction() as connection:
+        with (nullcontext(connection) if connection is not None else self.store.transaction()) as connection:
             self._ensure_learner(connection, learner_id)
             duplicate = connection.execute(text(
                 "SELECT * FROM evidence WHERE learner_id = :learner_id AND evidence_key = :key"
@@ -272,14 +273,16 @@ class LearnerStateService:
             SELECT * FROM evidence WHERE learner_id = :learner_id AND concept_id = :concept_id
             AND admission_status = 'accepted' ORDER BY occurred_at ASC, created_at ASC
         """), {"learner_id": learner_id, "concept_id": concept_id}).mappings().all()
-        latest = rows[-1]
+        latest = rows[-1] if rows else {"id": None, "reliability": 0, "condition": "independent", "outcome": None}
         reliability = float(latest["reliability"])
         independent = latest["condition"] == "independent"
         outcome = latest["outcome"]
         misconception = connection.execute(text("""
             SELECT 1 FROM misconception_hypotheses WHERE learner_id = :learner_id AND concept_id = :concept_id AND status = 'active'
         """), {"learner_id": learner_id, "concept_id": concept_id}).first()
-        if outcome == "incorrect" and misconception:
+        if not rows:
+            state_status, confidence = "unexplored", 0.0
+        elif outcome == "incorrect" and misconception:
             state_status, confidence = "misconception_detected", 0.1 * reliability
         elif outcome == "correct" and independent and reliability >= 0.5:
             state_status, confidence = "demonstrated", min(0.85, 0.7 * reliability + 0.1)
@@ -325,6 +328,22 @@ class LearnerStateService:
             version=values["version"], last_evidence_id=latest["id"], policy_version=policy_version,
             provenance=_object(values["provenance_json"]), created_at=values["created_at"], updated_at=now,
         )
+
+    def withdraw_evidence(self, learner_id: str, evidence_id: str, reason: str, *, connection: Connection) -> None:
+        """Exclude disputed evidence and recompute through the canonical reducer."""
+        row = connection.execute(text("SELECT * FROM evidence WHERE id=:id AND learner_id=:owner"),
+                                 {"id": evidence_id, "owner": learner_id}).mappings().first()
+        if row is None or row["admission_status"] != "accepted":
+            return
+        now = utc_now()
+        connection.execute(text("UPDATE evidence SET admission_status='rejected',admission_reason=:reason WHERE id=:id AND learner_id=:owner"),
+                           {"id": evidence_id, "owner": learner_id, "reason": reason})
+        connection.execute(text("UPDATE review_schedules SET status='superseded',updated_at=:now WHERE learner_id=:owner AND originating_evidence_id=:id"),
+                           {"now": now, "owner": learner_id, "id": evidence_id})
+        self._refresh_misconception_lifecycle(connection, learner_id, row["concept_id"], now)
+        self._reduce_state(connection, learner_id, row["concept_id"], row["graph_id"], row["graph_version"], row["policy_version"])
+        self._insert_system_event(connection, learner_id, "evidence.withdrawn", row["concept_id"],
+                                  {"evidenceId": evidence_id, "reason": reason}, {"owner": "learner_state_service"}, now)
 
     def _insert_system_event(self, connection: Connection, learner_id: str, kind: str, concept_id: str | None, payload: dict[str, Any], provenance: dict[str, Any], now: datetime) -> None:
         connection.execute(text("""
