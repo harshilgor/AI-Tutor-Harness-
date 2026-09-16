@@ -22,7 +22,7 @@ function blankDraft(): NoteDraft {
   return { id: null, title: 'Untitled note', body: '', revision: null, frontmatter: {} };
 }
 
-function NoteEditor({ closeRequest, onClose, onCloseRequestHandled, onDirtyChange, seed, onSeedConsumed }: { closeRequest: boolean; onClose: () => void; onCloseRequestHandled: () => void; onDirtyChange: (dirty: boolean) => void; seed: WorkspaceNoteSeed | null; onSeedConsumed: (id: string) => void }) {
+function NoteEditor({ closeRequest, onClose, onCloseRequestHandled, onDirtyChange, seed, onSeedConsumed, noteToOpen, onNoteOpenConsumed }: { closeRequest: boolean; onClose: () => void; onCloseRequestHandled: () => void; onDirtyChange: (dirty: boolean) => void; seed: WorkspaceNoteSeed | null; onSeedConsumed: (id: string) => void; noteToOpen: string | null; onNoteOpenConsumed: (noteId: string) => void }) {
   const [notes, setNotes] = useState<WorkspaceNoteSummary[]>([]);
   const [draft, setDraft] = useState<NoteDraft | null>(null);
   const [savedDraft, setSavedDraft] = useState<NoteDraft | null>(null);
@@ -33,6 +33,7 @@ function NoteEditor({ closeRequest, onClose, onCloseRequestHandled, onDirtyChang
   const [pendingAction, setPendingAction] = useState<(() => void) | null>(null);
   const requestId = useRef(0);
   const consumedSeeds = useRef(new Set<string>());
+  const consumedOpenNotes = useRef(new Set<string>());
 
   const dirty = Boolean(draft && (!savedDraft || draft.title !== savedDraft.title || draft.body !== savedDraft.body));
 
@@ -92,21 +93,31 @@ function NoteEditor({ closeRequest, onClose, onCloseRequestHandled, onDirtyChang
     });
   }
 
-  async function openNote(noteId: string) {
-    confirmBefore(() => {
-      void (async () => {
-        setLoading(true);
-        setError('');
-        try {
-          const note = await learningApi.getWorkspaceNote(noteId);
-          setDraft(toDraft(note));
-          setSavedDraft(toDraft(note));
-        } catch (cause) {
-          setError(cause instanceof Error ? cause.message : 'The note could not be opened.');
-        } finally { setLoading(false); }
-      })();
-    });
+  const loadNote = useCallback(async (noteId: string) => {
+    setLoading(true);
+    setError('');
+    try {
+      const note = await learningApi.getWorkspaceNote(noteId);
+      setDraft(toDraft(note));
+      setSavedDraft(toDraft(note));
+    } catch (cause) {
+      setError(cause instanceof Error ? cause.message : 'The note could not be opened.');
+    } finally { setLoading(false); }
+  }, []);
+
+  function openNote(noteId: string) {
+    confirmBefore(() => { void loadNote(noteId); });
   }
+
+  useEffect(() => {
+    if (!noteToOpen || consumedOpenNotes.current.has(noteToOpen)) return;
+    const timer = window.setTimeout(() => confirmBefore(() => {
+      consumedOpenNotes.current.add(noteToOpen);
+      onNoteOpenConsumed(noteToOpen);
+      void loadNote(noteToOpen);
+    }), 0);
+    return () => window.clearTimeout(timer);
+  }, [confirmBefore, loadNote, noteToOpen, onNoteOpenConsumed]);
 
   async function save(): Promise<boolean> {
     if (!draft || saving) return false;
@@ -162,7 +173,7 @@ function NoteEditor({ closeRequest, onClose, onCloseRequestHandled, onDirtyChang
   </section>;
 }
 
-export function WorkspacePanel({ quizSessionId, quizConceptId, layout, onLayoutChange, onCollapse, onExpand, noteSeed, onNoteSeedConsumed }: {
+export function WorkspacePanel({ quizSessionId, quizConceptId, layout, onLayoutChange, onCollapse, onExpand, noteSeed, noteToOpen, onNoteSeedConsumed, onNoteOpenConsumed }: {
   quizSessionId?: string | null;
   quizConceptId?: string;
   layout: WorkspacePanelLayout;
@@ -170,7 +181,9 @@ export function WorkspacePanel({ quizSessionId, quizConceptId, layout, onLayoutC
   onCollapse: () => void;
   onExpand: () => void;
   noteSeed: WorkspaceNoteSeed | null;
+  noteToOpen: string | null;
   onNoteSeedConsumed: (id: string) => void;
+  onNoteOpenConsumed: (noteId: string) => void;
 }) {
   const [launcherOpen, setLauncherOpen] = useState(false);
   const [notesDirty, setNotesDirty] = useState(false);
@@ -206,7 +219,7 @@ export function WorkspacePanel({ quizSessionId, quizConceptId, layout, onLayoutC
         <div className={styles.headerActions}><Button type="button" size="icon-xs" variant="ghost" onClick={closeActiveTab} aria-label={`Close ${tabNames[active]} tab`}><X size={15} /></Button><Button type="button" size="icon-xs" variant="ghost" onClick={() => { onLayoutChange(current => ({ ...current, collapsed: true })); onCollapse(); }} aria-label="Collapse workspace panel"><PanelRightClose size={16} /></Button></div>
       </header>
       <div className={styles.content}>
-        {active === 'notes' ? <NoteEditor closeRequest={noteCloseRequest} onDirtyChange={setNotesDirty} seed={noteSeed} onSeedConsumed={onNoteSeedConsumed} onCloseRequestHandled={() => setNoteCloseRequest(false)} onClose={() => { setNoteCloseRequest(false); removeActiveTab(); }} /> : null}
+        {active === 'notes' ? <NoteEditor closeRequest={noteCloseRequest} onDirtyChange={setNotesDirty} seed={noteSeed} onSeedConsumed={onNoteSeedConsumed} noteToOpen={noteToOpen} onNoteOpenConsumed={onNoteOpenConsumed} onCloseRequestHandled={() => setNoteCloseRequest(false)} onClose={() => { setNoteCloseRequest(false); removeActiveTab(); }} /> : null}
         {active === 'quiz' ? <QuizWorkspace sessionId={quizSessionId} conceptId={quizConceptId} inline /> : null}
         {active === 'sources' ? <div className={styles.comingSoon}><BookOpen size={26} /><h2>Sources</h2><p>Open a lesson citation or attached material to inspect it here. Source context stays explicit and does not silently enter a tutor request.</p></div> : null}
       </div>

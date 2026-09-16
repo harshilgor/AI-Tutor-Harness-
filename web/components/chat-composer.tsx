@@ -1,23 +1,35 @@
 "use client";
 
-import { useRef, useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import { ArrowUp, FileText, Paperclip, X, Upload } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import styles from './learn-chat.module.css';
-import type { Gear } from '@/lib/api';
+import { learningApi, type Gear, type WorkspaceNoteSummary } from '@/lib/api';
 import type { ChatMode } from '@/lib/learning-workflows';
 
 export type ChatAttachment = { id: string; name: string; file: File; versionId?: string; materialId?: string };
+export type ChatNoteMention = { noteId: string; title: string; revision: number; startOffset: number; endOffset: number };
 
-export function ChatComposer({ value, onChange, attachments, onAttachmentsChange, onSubmit, busy, followup, gear, onGearChange, mode = 'ask', onModeChange }: {
+export function ChatComposer({ value, onChange, attachments, onAttachmentsChange, onSubmit, busy, followup, gear, onGearChange, mode = 'ask', onModeChange, noteMentions = [], onAddNoteMention, onRemoveNoteMention, onOpenNoteMention }: {
   value: string; onChange: (value: string) => void; attachments: ChatAttachment[];
   onAttachmentsChange: (items: ChatAttachment[]) => void; onSubmit: () => void; busy: boolean; followup: boolean; gear: Gear; onGearChange: (gear: Gear) => void;
   mode?: ChatMode; onModeChange?: (mode: ChatMode) => void;
+  noteMentions?: ChatNoteMention[]; onAddNoteMention?: (note: WorkspaceNoteSummary) => void; onRemoveNoteMention?: (noteId: string) => void; onOpenNoteMention?: (noteId: string) => void;
 }) {
   const input = useRef<HTMLInputElement>(null);
   const dragDepth = useRef(0);
   const [dragging, setDragging] = useState(false);
   const [error, setError] = useState('');
+  const [noteMatches, setNoteMatches] = useState<WorkspaceNoteSummary[]>([]);
+  const mentionMatch = value.match(/(?:^|\s)@([^\s@]*)$/);
+  const noteQuery = mentionMatch?.[1] ?? null;
+  useEffect(() => {
+    if (noteQuery === null || !onAddNoteMention) return;
+    const timer = window.setTimeout(() => {
+      void learningApi.searchWorkspaceNotes(noteQuery).then(result => setNoteMatches(result.notes.filter(note => !noteMentions.some(item => item.noteId === note.id)).slice(0, 6))).catch(() => setNoteMatches([]));
+    }, 120);
+    return () => window.clearTimeout(timer);
+  }, [noteQuery, noteMentions, onAddNoteMention]);
   function add(files: File[]) {
     const accepted: ChatAttachment[] = [];
     const rejected: string[] = [];
@@ -38,10 +50,12 @@ export function ChatComposer({ value, onChange, attachments, onAttachmentsChange
     {dragging && <div className={styles.dropOverlay}><Upload size={26} /><strong>Drop your files here</strong><span>Books, notes, and anything you’re learning from</span></div>}
     {attachments.length > 0 && <div className={styles.attachments} aria-label="Chat attachments">{attachments.map(item => <div className={styles.attachment} key={item.id}><FileText size={21} /><div><strong title={item.name}>{item.name}</strong><span>{item.versionId ? 'In this conversation' : `${item.name.split('.').at(-1)?.toUpperCase()} · ${(item.file.size / 1024 / 1024).toFixed(1)} MB`}</span></div><button type="button" disabled={busy} aria-label={`Remove ${item.name} from this conversation`} onClick={() => onAttachmentsChange(attachments.filter(other => other.id !== item.id))}><X size={14} /></button></div>)}</div>}
     <div className={styles.gearToggle} role="group" aria-label="Conversation mode">{(['ask', 'learn'] as const).map(option => <button key={option} type="button" disabled={busy} aria-pressed={mode === option} className={mode === option ? styles.gearActive : ''} onClick={() => onModeChange?.(option)}>{option === 'ask' ? 'Ask' : 'Learn'}</button>)}</div>
+    {noteMentions.length > 0 ? <div className={styles.noteReceipt} aria-label="Learner note context">{noteMentions.map(note => <span key={note.noteId}><button type="button" onClick={() => onOpenNoteMention?.(note.noteId)} title="Open note in workspace">@{note.title}</button><small>{note.endOffset - note.startOffset} characters</small><button type="button" aria-label={`Remove ${note.title} from context`} onClick={() => onRemoveNoteMention?.(note.noteId)}><X size={12} /></button></span>)}<p>Learner-provided context only. It is not a verified source.</p></div> : null}
     <label htmlFor="chat-message" className="sr-only">Message your tutor</label>
     <textarea id="chat-message" disabled={busy} value={value} maxLength={4000} placeholder={followup ? 'Ask a follow-up…' : 'Ask anything, or drop in a book…'} rows={followup ? 2 : 3} onChange={event => onChange(event.target.value)}
       onPaste={event => { if (event.clipboardData.files.length) { event.preventDefault(); add(Array.from(event.clipboardData.files)); } }}
       onKeyDown={event => { if (event.key === 'Enter' && !event.shiftKey && !event.nativeEvent.isComposing) { event.preventDefault(); onSubmit(); } }} />
+    {noteQuery !== null && noteMatches.length > 0 ? <div className={styles.notePicker} role="listbox" aria-label="Notes to mention">{noteMatches.map(note => <button type="button" role="option" aria-selected="false" key={note.id} onClick={() => { onChange(value.replace(/@[^\s@]*$/, `@${note.title} `)); onAddNoteMention?.(note); setNoteMatches([]); }}><strong>{note.title}</strong><small>Revision {note.revision}</small></button>)}</div> : null}
     <input ref={input} type="file" hidden multiple accept=".pdf,.txt,.md,.png,.jpg,.jpeg,.webp,.gif" onChange={event => { add(Array.from(event.target.files || [])); event.target.value = ''; }} />
     <div className={styles.composerBottom}><div className={styles.composerTools}><Button type="button" variant="ghost" size="icon" disabled={busy} aria-label="Attach files" title="Attach PDF, text, Markdown, or images" onClick={() => input.current?.click()}><Paperclip size={19} /></Button><span>{attachments.length ? 'Ask about your attachments' : 'Files, books, notes, or a link'}</span><span className={styles.thinkingLabel}>Thinking</span><div className={styles.gearToggle} role="group" aria-label="Thinking depth">{(['Quick', 'Guided', 'Deep'] as Gear[]).map(option => <button type="button" key={option} className={gear === option ? styles.gearActive : ''} onClick={() => onGearChange(option)}>{option}</button>)}</div></div><Button size="icon" type="submit" disabled={busy || (!value.trim() && !attachments.length)} aria-label="Send message"><ArrowUp size={20} /></Button></div>
     {hasLink && <p className={styles.composerNote}>Links are shared as references. To teach from a page’s contents, attach the file or paste its text.</p>}

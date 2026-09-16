@@ -2,7 +2,7 @@
 
 import { useEffect, useRef, useState, type CSSProperties, type ReactNode } from 'react';
 import { WorkspacePanel, type WorkspacePanelLayout } from './workspace-panel';
-import { WORKSPACE_NOTE_SEED_EVENT, type WorkspaceNoteSeed } from '@/lib/workspace-events';
+import { WORKSPACE_NOTE_OPEN_EVENT, WORKSPACE_NOTE_SEED_EVENT, type WorkspaceNoteSeed } from '@/lib/workspace-events';
 import styles from './workspace-split.module.css';
 
 const STORAGE_KEY = 'forma-workspace-panel-v1';
@@ -21,6 +21,7 @@ export function WorkspaceSplit({ children, quizSessionId, quizConceptId }: { chi
   const [ready, setReady] = useState(false);
   const [compact, setCompact] = useState(false);
   const [noteSeed, setNoteSeed] = useState<WorkspaceNoteSeed | null>(null);
+  const [noteToOpen, setNoteToOpen] = useState<string | null>(null);
   const groupRef = useRef<HTMLDivElement | null>(null);
   const resizing = useRef(false);
 
@@ -40,6 +41,16 @@ export function WorkspaceSplit({ children, quizSessionId, quizConceptId }: { chi
     };
     window.addEventListener(WORKSPACE_NOTE_SEED_EVENT, receiveDraft);
     return () => window.removeEventListener(WORKSPACE_NOTE_SEED_EVENT, receiveDraft);
+  }, []);
+  useEffect(() => {
+    const receiveOpen = (event: Event) => {
+      const noteId = (event as CustomEvent<string>).detail;
+      if (!noteId) return;
+      setNoteToOpen(noteId);
+      setLayout(current => ({ ...current, collapsed: false, tabs: current.tabs.includes('notes') ? current.tabs : [...current.tabs, 'notes'], activeTab: 'notes' }));
+    };
+    window.addEventListener(WORKSPACE_NOTE_OPEN_EVENT, receiveOpen);
+    return () => window.removeEventListener(WORKSPACE_NOTE_OPEN_EVENT, receiveOpen);
   }, []);
   useEffect(() => {
     const timer = window.setTimeout(() => {
@@ -68,7 +79,7 @@ export function WorkspaceSplit({ children, quizSessionId, quizConceptId }: { chi
     return () => { window.removeEventListener('pointermove', resize); window.removeEventListener('pointerup', stop); };
   }, []);
 
-  const panel = <WorkspacePanel quizSessionId={quizSessionId} quizConceptId={quizConceptId} layout={layout} onLayoutChange={setLayout} noteSeed={noteSeed} onNoteSeedConsumed={id => setNoteSeed(current => current?.id === id ? null : current)}
+  const panel = <WorkspacePanel quizSessionId={quizSessionId} quizConceptId={quizConceptId} layout={layout} onLayoutChange={setLayout} noteSeed={noteSeed} noteToOpen={noteToOpen} onNoteSeedConsumed={id => setNoteSeed(current => current?.id === id ? null : current)} onNoteOpenConsumed={noteId => setNoteToOpen(current => current === noteId ? null : current)}
     onCollapse={() => setLayout(current => ({ ...current, collapsed: true }))}
     onExpand={() => setLayout(current => ({ ...current, collapsed: false }))} />;
 
