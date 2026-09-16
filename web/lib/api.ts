@@ -364,6 +364,28 @@ export type LocalDataExport = {
   tables: Record<string, Array<Record<string, unknown>>>;
 };
 
+/** A learner-owned Markdown document in the local workspace vault. */
+export type WorkspaceNoteSummary = {
+  id: string;
+  title: string;
+  frontmatter: Record<string, unknown>;
+  revision: number;
+  relativePath: string;
+  updatedAt: string;
+};
+
+export type WorkspaceNote = WorkspaceNoteSummary & {
+  learnerId: string;
+  body: string;
+  createdAt: string;
+};
+
+export type WorkspaceNoteInput = {
+  title: string;
+  body?: string;
+  frontmatter?: Record<string, unknown>;
+};
+
 export const learningApi = {
   async createBaselineGraph(input: { topic: string; objective?: string; depth?: 'overview' | 'introductory' | 'deep' }, options?: { signal?: AbortSignal; idempotencyKey?: string }): Promise<BaselineGraphResponse> {
     const scope = await request<{ id: string }>('/v1/topic-scopes', {
@@ -476,6 +498,40 @@ export const learningApi = {
 
   updateNote(noteId: string, body: string, version: number): Promise<NoteRecord> {
     return request<NoteRecord>(`/v1/notes/${encodeURIComponent(noteId)}`, { method: 'PATCH', body: JSON.stringify({ body, version }) });
+  },
+
+  listWorkspaceNotes(learnerId = 'local'): Promise<WorkspaceNoteSummary[]> {
+    return request<WorkspaceNoteSummary[]>(`/v1/learners/${encodeURIComponent(learnerId)}/workspace-notes`, {
+      headers: { 'X-Dev-Learner-Id': learnerId },
+    });
+  },
+
+  searchWorkspaceNotes(query: string, learnerId = 'local'): Promise<{ notes: WorkspaceNoteSummary[] }> {
+    return request<{ notes: WorkspaceNoteSummary[] }>(`/v1/learners/${encodeURIComponent(learnerId)}/workspace-notes/search?${new URLSearchParams({ query })}`, {
+      headers: { 'X-Dev-Learner-Id': learnerId },
+    });
+  },
+
+  getWorkspaceNote(noteId: string, learnerId = 'local'): Promise<WorkspaceNote> {
+    return request<WorkspaceNote>(`/v1/learners/${encodeURIComponent(learnerId)}/workspace-notes/${encodeURIComponent(noteId)}`, {
+      headers: { 'X-Dev-Learner-Id': learnerId },
+    });
+  },
+
+  createWorkspaceNote(input: WorkspaceNoteInput, learnerId = 'local'): Promise<WorkspaceNote> {
+    return request<WorkspaceNote>(`/v1/learners/${encodeURIComponent(learnerId)}/workspace-notes`, {
+      method: 'POST',
+      headers: { 'X-Dev-Learner-Id': learnerId },
+      body: JSON.stringify(input),
+    });
+  },
+
+  updateWorkspaceNote(noteId: string, input: WorkspaceNoteInput & { expectedRevision: number }, learnerId = 'local'): Promise<WorkspaceNote> {
+    return request<WorkspaceNote>(`/v1/learners/${encodeURIComponent(learnerId)}/workspace-notes/${encodeURIComponent(noteId)}`, {
+      method: 'PATCH',
+      headers: { 'X-Dev-Learner-Id': learnerId },
+      body: JSON.stringify(input),
+    });
   },
 
   exportLocalData(learnerId = 'local'): Promise<LocalDataExport> {

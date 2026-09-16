@@ -17,6 +17,8 @@ desktop/.vite/
 backend/data/*.db
 backend/build/
 backend/data/materials/
+backend/data/notes*/
+work/
 
 # Local configuration and nested repository backup
 .env

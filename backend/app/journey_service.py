@@ -9,6 +9,7 @@ from .model_provider import ModelProviderError
 from .session_models import LessonArtifact, LessonBlock, TeachingIntent, RunStatus, ActionStatus
 from .models import utc_now
 from .workflow_store import WorkflowStore, uid
+from .workspace_note_context import WorkspaceNoteContextService
 
 
 class JourneyService:
@@ -47,6 +48,20 @@ class JourneyService:
             journey.update(goal=command.message, steps=[], position=0, status="new")
         if not self.provider:
             raise ModelProviderError("Connect a model provider to start a guided learning journey. Your session is saved.")
+        note_manifest = WorkspaceNoteContextService(self.store).resolve(
+            owner,
+            command.note_context,
+        )
+        # Persist a receipt only. The raw note text must remain confined to the
+        # provider call and the learner-owned Markdown vault.
+        note_receipt = {
+            "label": note_manifest.label,
+            "notes": [{
+                "noteId": item.note_id, "title": item.title, "revision": item.revision,
+                "startOffset": item.start_offset, "endOffset": item.end_offset,
+            } for item in note_manifest.notes],
+            "totalCharacters": note_manifest.total_characters,
+        }
         sources = retrieve(self.store, owner, sid, f"{journey['goal']} {command.message}")
         manifest = save_manifest(self.store, owner, sid, command.message, sources)
         evidence = canonical_evidence(self.store, owner, graph)
@@ -98,7 +113,8 @@ class JourneyService:
             "Use 1-4 concise blocks. Do not invent citations or claim independent verification.\n" +
             json.dumps({"message": command.message, "goal": journey["goal"], "step": step, "gear": command.gear.value,
                         "plan": plan.model_dump(mode="json"), "evidence": evidence.model_dump(mode="json"),
-                        "recent": recent, "assessments": attempts, "sources": sources}), 3500)
+                        "recent": recent, "assessments": attempts, "sources": sources,
+                        "learnerNotes": note_manifest.model_dump(mode="json")}), 3500)
         from .model_provider import OpenRouterLessonProvider
         blocks = OpenRouterLessonProvider._parse_blocks(raw)
         artifact = LessonArtifact(id=uid("lesson"), session_id=sid, concept_id=concept_id, graph_revision=graph.version,
@@ -109,7 +125,8 @@ class JourneyService:
         self.store.save_action(run.model_copy(update={"status": ActionStatus.qualified_response, "progress": 100, "lesson": artifact, "updated_at": utc_now()}))
         journey["turns"].append({"question": command.message or ("Start learning" if command.action == "start" else "Continue"),
                                  "lesson": artifact.model_dump(mode="json", by_alias=True), "sessionId": sid,
-                                 "sources": sources, "contextId": manifest["id"], "mode": command.mode})
+                                 "sources": sources, "contextId": manifest["id"], "mode": command.mode,
+                                 "noteContext": note_receipt})
         journey["status"] = "teaching" if command.mode == "learn" else journey["status"]
         return journey
 

@@ -1,7 +1,7 @@
 """Public commands and private authoring contracts; solutions never reach the UI."""
 from typing import Literal
 from pydantic import Field, model_validator
-from .session_models import ApiModel, TeachingGear
+from .session_models import ApiModel, NoteContextInput, TeachingGear
 
 
 class QuizCreate(ApiModel):
@@ -77,6 +77,7 @@ class JourneyCommand(ApiModel):
     mode: Literal["ask", "learn"] = "learn"
     gear: TeachingGear = TeachingGear.guided
     message: str = Field(default="", max_length=4000)
+    note_context: NoteContextInput | None = None
 
 
 class RouteStep(ApiModel):

@@ -11,7 +11,7 @@ from datetime import datetime
 from enum import StrEnum
 from typing import Any, Literal
 
-from pydantic import BaseModel, ConfigDict, Field, field_validator
+from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
 from .models import utc_now
 from .policy_models import ActionContext, PolicyValidationResult, TeachingPlan
@@ -91,6 +91,38 @@ class BranchAnchor(ApiModel):
     end_offset: int | None = Field(default=None, ge=0)
 
 
+class NoteContextSelectionInput(ApiModel):
+    """Stable note selection carried by Ask/Learn commands.
+
+    The API only carries note IDs, revisions, and optional body offsets.  The
+    server resolves the actual text owner-safely for the active request.
+    """
+
+    note_id: str = Field(min_length=1, max_length=160)
+    expected_revision: int | None = Field(default=None, ge=1)
+    start_offset: int | None = Field(default=None, ge=0)
+    end_offset: int | None = Field(default=None, ge=0)
+
+    @model_validator(mode="after")
+    def offsets_are_paired(self) -> "NoteContextSelectionInput":
+        if (self.start_offset is None) != (self.end_offset is None):
+            raise ValueError("start_offset and end_offset must be supplied together.")
+        if self.start_offset is not None and self.end_offset is not None and self.end_offset <= self.start_offset:
+            raise ValueError("end_offset must be greater than start_offset.")
+        return self
+
+
+class NoteContextInput(ApiModel):
+    notes: list[NoteContextSelectionInput] = Field(min_length=1, max_length=8)
+
+    @field_validator("notes")
+    @classmethod
+    def unique_notes(cls, value: list[NoteContextSelectionInput]) -> list[NoteContextSelectionInput]:
+        if len({item.note_id for item in value}) != len(value):
+            raise ValueError("A note may appear only once in a context manifest.")
+        return value
+
+
 class TeachingActionInput(ApiModel):
     """A typed command sent to the learning kernel.
 
@@ -108,6 +140,7 @@ class TeachingActionInput(ApiModel):
     anchor: BranchAnchor | None = None
     expected_state_version: int | None = Field(default=None, ge=1)
     curriculum_version: int | None = Field(default=None, ge=1)
+    note_context: NoteContextInput | None = None
 
     @field_validator("message")
     @classmethod

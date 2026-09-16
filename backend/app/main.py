@@ -43,10 +43,13 @@ from .state_models import BranchUpdate, Position, StateEventCreate
 from .state_routes import build_state_router
 from .state_service import LearnerStateService
 from .storage import Store
-from .material_routes import build_material_router
+from .material_routes import build_material_router, material_owner
 from .context_service import canonical_evidence
 from .learning_routes import build_learning_router
 from .privacy_routes import build_privacy_router
+from .workspace_note_routes import build_workspace_note_router
+from .workspace_note_context import WorkspaceNoteContextService
+from .workspace_note_service import WorkspaceNoteError
 
 app = FastAPI(title="AI Tutor Harness API", version="0.1.0")
 local_web_origin = os.getenv("FORMA_WEB_ORIGIN", "http://127.0.0.1:3000")
@@ -84,6 +87,7 @@ app.include_router(build_state_router(get_store))
 app.include_router(build_material_router(get_store, lambda: lesson_provider))
 app.include_router(build_learning_router(get_store, lambda: lesson_provider))
 app.include_router(build_privacy_router(get_store))
+app.include_router(build_workspace_note_router(get_store))
 
 
 @app.get("/health")
@@ -236,6 +240,7 @@ def create_teaching_action(
     session_id: str,
     request: TeachingActionInput,
     db: Store = Depends(get_store),
+    owner: str = Depends(material_owner),
     idempotency_key: str | None = Header(default=None, alias="Idempotency-Key"),
 ) -> RunStatus:
     """Run the first complete learning-kernel action synchronously.
@@ -247,6 +252,8 @@ def create_teaching_action(
     session = db.get_session(session_id)
     if session is None:
         raise HTTPException(status_code=404, detail={"code": "session_not_found", "message": "Learning session does not exist."})
+    if session.learner_id != owner:
+        raise HTTPException(status_code=404, detail={"code": "session_not_found", "message": "Learning session does not exist."})
     if request.expected_state_version is not None and request.expected_state_version != session.state_version:
         raise HTTPException(status_code=409, detail={"code": "stale_session", "message": "The session changed; reload it before sending this action."})
     if idempotency_key:
@@ -256,6 +263,13 @@ def create_teaching_action(
     graph = db.get_graph(session.graph_id)
     if graph is None:
         raise HTTPException(status_code=409, detail={"code": "graph_unavailable", "message": "The session's graph is no longer available."})
+    try:
+        note_manifest = WorkspaceNoteContextService(db).resolve(
+            owner,
+            request.note_context,
+        )
+    except WorkspaceNoteError as exc:
+        raise HTTPException(status_code=exc.status_code, detail={"code": exc.code, "message": exc.message}) from exc
 
     active_branch = None
     if request.branch_id:
@@ -313,6 +327,7 @@ def create_teaching_action(
             "graph_revision": graph.version,
             "learner_state_version": action_context.learner_evidence.state_version,
             "profile": action_context.teaching_profile.model_dump(mode="json", by_alias=True),
+            "note_context_count": len(note_manifest.notes),
         })
         prerequisite_resolution = resolve_prerequisites(graph, action_context)
         plan = choose_teaching_plan(graph, action_context, prerequisite_resolution, intent)
@@ -336,7 +351,8 @@ def create_teaching_action(
         if not validation.accepted:
             raise RuntimeError("Teaching plan failed deterministic policy validation.")
         artifact = build_lesson(
-            graph, concept, request, session.id, intent, session.graph_revision, action_id, action_context, plan, lesson_provider
+            graph, concept, request, session.id, intent, session.graph_revision, action_id, action_context, plan, lesson_provider,
+            [item.model_dump(mode="json") for item in note_manifest.notes] or None,
         )
         db.save_artifact(artifact)
         _event(db, action_id, 5, "artifact.created", {"lesson_id": artifact.id, "plan_id": plan.id, "block_count": len(artifact.blocks)})

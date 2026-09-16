@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from typing import Any
 from uuid import uuid4
 
 from .models import Concept, GraphVersion
@@ -84,6 +85,7 @@ def build_lesson(
     context: ActionContext,
     plan: TeachingPlan,
     lesson_provider: LessonProvider | None = None,
+    note_context: list[dict[str, Any]] | None = None,
 ) -> LessonArtifact:
     """Render the validated plan. Rendering never creates learner evidence."""
 
@@ -125,9 +127,13 @@ def build_lesson(
         ))
 
     if lesson_provider is not None:
-        for generated in lesson_provider.generate(
-            graph=graph, concept=concept, context=context, plan=plan, intent=intent
-        ):
+        provider_input = {
+            "graph": graph, "concept": concept, "context": context,
+            "plan": plan, "intent": intent,
+        }
+        if note_context:
+            provider_input["note_context"] = note_context
+        for generated in lesson_provider.generate(**provider_input):
             blocks.append(LessonBlock(
                 id=f"block_{uuid4().hex[:10]}", kind=generated.kind, heading=generated.heading,
                 body=generated.body, concept_ids=[concept.id], source_ids=list(concept.source_ids),
