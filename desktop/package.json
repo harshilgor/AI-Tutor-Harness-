@@ -15,7 +15,8 @@
     "build:backend": "node scripts/build-backend.cjs",
     "prepare:resources": "node scripts/prepare-resources.cjs",
     "prepackage": "npm run prepare:resources",
-    "premake": "npm run prepare:resources"
+    "premake": "npm run prepare:resources",
+    "smoke:web": "node scripts/smoke-packaged-web.cjs"
   },
   "engines": {
     "node": ">=22.13.0"
