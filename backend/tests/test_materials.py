@@ -146,3 +146,27 @@ def test_retrieval_excludes_answer_keys_and_respects_attachment_and_budget(mater
     assert retrieve(store, "local", "session_material", "linear") == []
     client.delete(f"/v1/materials/{items[0]['id']}")
     assert client.get(f"/v1/context-manifests/{response['contextId']}").status_code == 404
+
+
+def test_explicit_passage_selection_is_attached_owner_scoped_and_manifest_bounded(material_api):
+    from backend.app.models import utc_now, TopicScope
+    from backend.app.graph_generator import GraphGenerator
+    from backend.app.session_models import LearningSession
+    client, store = material_api
+    scope = TopicScope(id="scope_explicit", topic="Calculus", resolved_meaning="Calculus", objective="Learn", depth="introductory", created_at=utc_now())
+    graph = GraphGenerator().generate(scope); store.save_scope(scope); store.save_graph(graph)
+    store.save_session(LearningSession(id="session_explicit", graph_id=graph.id, created_at=utc_now(), updated_at=utc_now()))
+    chosen = client.post("/v1/materials/text", json={"title": "Chosen", "text": "A derivative measures a local rate of change."}).json()
+    other = client.post("/v1/materials/text", json={"title": "Other", "text": "An integral accumulates quantities."}).json()
+    for item in (chosen, other):
+        client.post("/v1/sessions/session_explicit/materials", json={"materialVersionId": item["versionId"]})
+    chosen_span = client.get(f"/v1/material-versions/{chosen['versionId']}/blocks").json()["blocks"][0]["id"]
+    other_span = client.get(f"/v1/material-versions/{other['versionId']}/blocks").json()["blocks"][0]["id"]
+    result = client.post("/v1/sessions/session_explicit/material-answer", json={"message": "rates", "selectedSpanIds": [chosen_span]}).json()
+    manifest = client.get(f"/v1/context-manifests/{result['contextId']}").json()
+    assert manifest["retrievalMode"] == "explicit_selection"
+    assert manifest["selectedSpanIds"] == [chosen_span]
+    assert [source["spanId"] for source in manifest["sources"]] == [chosen_span]
+    assert "text" not in manifest["sources"][0]
+    denied = client.post("/v1/sessions/session_explicit/material-answer", headers={"X-Dev-Learner-Id": "other"}, json={"message": "rates", "selectedSpanIds": [other_span]})
+    assert denied.status_code == 404

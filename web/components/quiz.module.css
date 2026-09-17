@@ -23,3 +23,5 @@
 .saved span { color: var(--muted-foreground); font-size: .875rem; }
 .card :focus-visible { outline: 2px solid var(--primary); outline-offset: 3px; }
 @media(max-width:600px) { .page { padding: 1.5rem .75rem; } .card { padding: 1rem; } .progress { align-items: flex-start; flex-direction: column; } }
+
+.sourceChips{display:flex;flex-wrap:wrap;gap:6px;margin:10px 0}.sourceChips button{font-size:11px}

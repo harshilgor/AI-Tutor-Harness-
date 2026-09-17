@@ -60,6 +60,8 @@ class SessionCreate(ApiModel):
     # replace this request field with the authenticated learner identity.
     learner_id: str = Field(default="local", min_length=1, max_length=120, pattern=r"^[A-Za-z0-9_.:-]+$")
     gear: TeachingGear = TeachingGear.guided
+    domain_pack_id: str | None = Field(default=None, max_length=120)
+    domain_pack_version: int | None = Field(default=None, ge=1)
 
     @field_validator("graph_id", "scope_id", "topic", "goal", "learner_id")
     @classmethod
@@ -75,6 +77,10 @@ class LearningSession(ApiModel):
     learner_id: str = Field(default="local", min_length=1, max_length=120, pattern=r"^[A-Za-z0-9_.:-]+$")
     graph_id: str
     graph_revision: int = 1
+    # A session is historical: later pack updates must not alter its source
+    # and graph contract.
+    domain_pack_id: str | None = None
+    domain_pack_version: int | None = None
     goal: str | None = None
     current_concept_id: str | None = None
     current_lesson_id: str | None = None

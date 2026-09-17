@@ -52,6 +52,41 @@ class LearnerStateResponse(ApiModel):
     states: list[LearnerConceptState] = Field(default_factory=list)
 
 
+class ConceptStateExplanation(ApiModel):
+    """Read-only explanation assembled from admitted evidence."""
+    state: LearnerConceptState
+    admitted_evidence: list[EvidenceRecord] = Field(default_factory=list)
+    rationale: str
+    review: ReviewSchedule | None = None
+
+
+class TimelineEntry(ApiModel):
+    id: str
+    kind: str
+    occurred_at: datetime
+    concept_id: str | None = None
+    summary: str
+    deep_link: dict[str, str] = Field(default_factory=dict)
+
+
+class TimelinePage(ApiModel):
+    entries: list[TimelineEntry] = Field(default_factory=list)
+    next_cursor: str | None = None
+
+
+class EvidenceChallengeCreate(ApiModel):
+    reason: str = Field(min_length=5, max_length=2000)
+
+
+class EvidenceChallenge(ApiModel):
+    id: str
+    evidence_id: str
+    learner_id: str
+    reason: str
+    status: Literal["accepted"] = "accepted"
+    created_at: datetime
+
+
 class StateEventCreate(ApiModel):
     kind: str = Field(min_length=1, max_length=100, pattern=r"^[a-z][a-z0-9_.-]*$")
     concept_id: str | None = Field(default=None, max_length=160)

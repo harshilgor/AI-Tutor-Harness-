@@ -10,6 +10,23 @@ class QuizCreate(ApiModel):
     count: int = Field(default=5, ge=1, le=10)
     difficulty: Literal["adaptive", "foundational", "standard", "stretch"] = "adaptive"
     origin: Literal["quiz", "learn_inline"] = "quiz"
+    mode: Literal["topic_drill", "timed_short_quiz"] = "topic_drill"
+    mode_config: dict[str, int] = Field(default_factory=dict)
+    selected_span_ids: list[str] = Field(default_factory=list, max_length=6)
+
+    @model_validator(mode="after")
+    def validate_mode(self):
+        allowed = {"duration_seconds"} if self.mode == "timed_short_quiz" else set()
+        unknown = set(self.mode_config) - allowed
+        if unknown:
+            raise ValueError("Unsupported mode configuration")
+        if self.mode == "timed_short_quiz":
+            seconds = self.mode_config.get("duration_seconds")
+            if seconds is None or not 60 <= seconds <= 7200:
+                raise ValueError("Timed quizzes need a duration between 60 seconds and 2 hours")
+        elif self.mode_config:
+            raise ValueError("Topic drills do not accept mode configuration")
+        return self
 
 
 class AnswerCommand(ApiModel):

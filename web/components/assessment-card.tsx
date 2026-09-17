@@ -6,10 +6,10 @@ import { RichContent } from './rich-content';
 import type { Attempt, Presentation } from '@/lib/learning-workflows';
 import styles from './quiz.module.css';
 
-export function AssessmentCard({ item, attempt, busy, onAnswer, onHint, onChallenge }: {
+export function AssessmentCard({ item, attempt, busy, onAnswer, onHint, onChallenge, onCreateRepairNote, onOpenSource }: {
   item: Presentation; attempt?: Attempt; busy: boolean;
   onAnswer: (response: { response: string; selectedIds: string[]; outcome: 'answer' | 'dont_know' | 'skip' }) => void;
-  onHint: () => void; onChallenge: (reason: string) => void;
+  onHint: () => void; onChallenge: (reason: string) => void; onCreateRepairNote?: (attemptId: string) => void; onOpenSource?: (source: { spanId: string; versionId?: string; title?: string }) => void;
 }) {
   const [draft] = useState<{response?: string; selected?: string[]}>(() => { try { return JSON.parse(localStorage.getItem(`quiz-draft:${item.id}`) || '{}'); } catch { return {}; } });
   const [response, setResponse] = useState(draft.response || '');
@@ -23,6 +23,7 @@ export function AssessmentCard({ item, attempt, busy, onAnswer, onHint, onChalle
   return <article className={styles.card} aria-label="Quiz question">
     <span className={styles.meta}>{item.difficulty} · {item.kind === 'multiple' ? 'Select all correct answers · exact match scoring' : item.kind === 'short' ? 'Explain your reasoning' : 'Select one answer'}</span>
     <RichContent body={item.stem} />
+    {item.sources?.length ? <div className={styles.sourceChips} aria-label="Question sources">{item.sources.map(source => <Button key={source.spanId} type="button" size="sm" variant="outline" onClick={() => onOpenSource?.(source)}>{source.title} · Page {source.pageIndex + 1}</Button>)}</div> : null}
     <fieldset disabled={busy || !!attempt} className={styles.responses}>
       <legend className="sr-only">Your answer</legend>
       {item.kind === 'short' ? <textarea aria-label="Your reasoning" rows={5} value={response} onChange={e => save(e.target.value, selected)} maxLength={6000} placeholder="Explain how you reached your answer…" /> : item.options.map(option => <label key={option.id} className={styles.option}>
@@ -42,7 +43,7 @@ export function AssessmentCard({ item, attempt, busy, onAnswer, onHint, onChalle
       <RichContent body={attempt.feedback} />
       <details open><summary>Reasoning</summary><RichContent body={attempt.solution} /></details>
       {attempt.conceptState && <p className={styles.meta}>Concept evidence: {attempt.conceptState.replaceAll('_', ' ')} · Not a calibrated mastery estimate</p>}
-      <Button variant="ghost" onClick={() => setChallenging(!challenging)}>Flag question or feedback</Button>
+      {attempt && onCreateRepairNote ? <Button variant="outline" disabled={busy} onClick={() => onCreateRepairNote(attempt.id)}>Create repair note</Button> : null}<Button variant="ghost" onClick={() => setChallenging(!challenging)}>Flag question or feedback</Button>
       {challenging && <div><textarea aria-label="Why is this question or feedback unclear?" value={reason} onChange={e => setReason(e.target.value)} maxLength={2000} /><Button disabled={busy || reason.trim().length < 5} onClick={() => { onChallenge(reason); setChallenging(false); }}>Submit for review</Button></div>}
     </section>}
   </article>;

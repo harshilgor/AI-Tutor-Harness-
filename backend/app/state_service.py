@@ -3,6 +3,8 @@
 from __future__ import annotations
 
 import json
+import base64
+import binascii
 from contextlib import nullcontext
 from datetime import datetime, timedelta, timezone
 from typing import Any
@@ -30,6 +32,10 @@ from .state_models import (
     ReviewSchedule,
     StateEvent,
     StateEventCreate,
+    ConceptStateExplanation,
+    TimelineEntry,
+    TimelinePage,
+    EvidenceChallenge,
 )
 from .storage import Store
 
@@ -135,6 +141,77 @@ class LearnerStateService:
                 "SELECT * FROM learner_concept_states WHERE learner_id = :learner_id ORDER BY concept_id"
             ), {"learner_id": learner_id}).mappings().all()
         return LearnerStateResponse(learner_id=learner_id, states=[self._state_from_row(row) for row in rows])
+
+    def explain_state(self, learner_id: str, concept_id: str) -> ConceptStateExplanation:
+        """Projection only: evidence remains canonical and is never changed here."""
+        with self.store.engine.connect() as connection:
+            state_row = connection.execute(text("SELECT * FROM learner_concept_states WHERE learner_id=:owner AND concept_id=:concept"), {"owner": learner_id, "concept": concept_id}).mappings().first()
+            if state_row is None:
+                raise StateServiceError("concept_state_not_found", "There is no recorded learning state for this concept.", 404)
+            evidence_rows = connection.execute(text("""SELECT * FROM evidence WHERE learner_id=:owner AND concept_id=:concept
+                AND admission_status='accepted' ORDER BY occurred_at DESC, created_at DESC LIMIT 20"""), {"owner": learner_id, "concept": concept_id}).mappings().all()
+            review_row = connection.execute(text("""SELECT * FROM review_schedules WHERE learner_id=:owner AND concept_id=:concept
+                AND status IN ('scheduled','due') ORDER BY due_at ASC LIMIT 1"""), {"owner": learner_id, "concept": concept_id}).mappings().first()
+        state = self._state_from_row(state_row)
+        evidence = [self._evidence_from_row(row) for row in evidence_rows]
+        latest = evidence[0] if evidence else None
+        rationale = f"{state.status.value.replace('_', ' ')} from {len(evidence)} admitted evidence record{'s' if len(evidence) != 1 else ''}."
+        if latest:
+            rationale += f" Latest result was {latest.outcome} under {latest.condition.value} conditions."
+        return ConceptStateExplanation(state=state, admitted_evidence=evidence, rationale=rationale, review=ReviewSchedule(**dict(review_row)) if review_row else None)
+
+    def timeline(self, learner_id: str, cursor: str | None = None, limit: int = 30) -> TimelinePage:
+        """A display-safe, cursor-paginated projection of durable activity events."""
+        marker_time: datetime | None = None
+        marker_id: str | None = None
+        if cursor:
+            try:
+                decoded = base64.urlsafe_b64decode(cursor.encode("ascii")).decode("utf-8")
+                value = json.loads(decoded)
+                marker_time = datetime.fromisoformat(value["recordedAt"])
+                marker_id = value["id"]
+                if not isinstance(marker_id, str) or not marker_id:
+                    raise ValueError("missing event id")
+            except (ValueError, KeyError, TypeError, UnicodeError, binascii.Error, json.JSONDecodeError) as exc:
+                raise StateServiceError("invalid_timeline_cursor", "The timeline cursor is invalid. Reload the timeline.", 422) from exc
+        with self.store.engine.connect() as connection:
+            if marker_time is None:
+                query = text("""SELECT id, kind, concept_id, payload_json, recorded_at FROM state_events
+                    WHERE learner_id=:owner ORDER BY recorded_at DESC, id DESC LIMIT :limit""")
+                params = {"owner": learner_id, "limit": limit + 1}
+            else:
+                query = text("""SELECT id, kind, concept_id, payload_json, recorded_at FROM state_events
+                    WHERE learner_id=:owner AND (recorded_at < :marker_time OR (recorded_at = :marker_time AND id < :marker_id))
+                    ORDER BY recorded_at DESC, id DESC LIMIT :limit""")
+                params = {"owner": learner_id, "marker_time": marker_time, "marker_id": marker_id, "limit": limit + 1}
+            rows = connection.execute(query, params).mappings().all()
+        has_more = len(rows) > limit
+        rows = rows[:limit]
+        entries: list[TimelineEntry] = []
+        for row in rows:
+            payload = _object(row["payload_json"])
+            link: dict[str, str] = {}
+            if payload.get("lessonId"): link = {"kind": "lesson", "id": str(payload["lessonId"])}
+            elif payload.get("evidenceId"): link = {"kind": "evidence", "id": str(payload["evidenceId"])}
+            entries.append(TimelineEntry(id=row["id"], kind=row["kind"], occurred_at=row["recorded_at"], concept_id=row["concept_id"], summary=row["kind"].replace(".", " ").replace("_", " "), deep_link=link))
+        next_cursor = None
+        if has_more and entries:
+            payload = json.dumps({"recordedAt": entries[-1].occurred_at.isoformat(), "id": entries[-1].id}, separators=(",", ":"))
+            next_cursor = base64.urlsafe_b64encode(payload.encode("utf-8")).decode("ascii")
+        return TimelinePage(entries=entries, next_cursor=next_cursor)
+
+    def challenge_evidence(self, learner_id: str, evidence_id: str, reason: str) -> EvidenceChallenge:
+        """Audit the learner challenge then delegate invalidation and reduction to the sole state writer."""
+        now = utc_now()
+        challenge_id = f"evidence_challenge_{uuid4().hex}"
+        with self.store.transaction() as connection:
+            evidence = connection.execute(text("SELECT 1 FROM evidence WHERE id=:id AND learner_id=:owner"), {"id": evidence_id, "owner": learner_id}).first()
+            if evidence is None:
+                raise StateServiceError("evidence_not_found", "This evidence is not available.", 404)
+            connection.execute(text("""INSERT INTO evidence_challenges(id, learner_id, evidence_id, reason, status, created_at)
+                VALUES (:id,:owner,:evidence,:reason,'accepted',:now)"""), {"id": challenge_id, "owner": learner_id, "evidence": evidence_id, "reason": reason, "now": now})
+            self.withdraw_evidence(learner_id, evidence_id, "learner_challenged", connection=connection)
+        return EvidenceChallenge(id=challenge_id, evidence_id=evidence_id, learner_id=learner_id, reason=reason, created_at=now)
 
     def append_event(self, learner_id: str, request: StateEventCreate) -> tuple[StateEvent, bool]:
         now = utc_now()

@@ -8,6 +8,8 @@ from .model_provider import ModelProviderError
 from .workflow_store import WorkflowStore, uid
 from .quiz_service import QuizService
 from .journey_service import JourneyService
+from .note_draft_models import CreateNoteDraft, NoteDraftReplaceCommand
+from .note_draft_service import NoteDraftService
 
 
 def run_job(store, provider, job_id):
@@ -16,11 +18,13 @@ def run_job(store, provider, job_id):
     if not job:
         return
     owner, target, payload, kind = job["owner_id"], job["target_id"], job["payload"], job["kind"]
-    quiz, journey = QuizService(store, provider), JourneyService(store, provider)
+    quiz, journey, drafts = QuizService(store, provider), JourneyService(store, provider), NoteDraftService(store, provider)
     try:
         prepared = None
         if kind == "journey":
             prepared = journey.prepare(owner, target, JourneyCommand.model_validate(payload))
+        elif kind == "note_draft":
+            prepared = drafts.prepare(owner, target, CreateNoteDraft.model_validate(payload))
         elif kind == "next":
             prepared = quiz.prepare(owner, target, payload["expected_revision"])
         elif kind == "answer":
@@ -31,6 +35,8 @@ def run_job(store, provider, job_id):
                 result = {"quizId": created["id"]}
             elif kind == "journey":
                 result = journey.commit(conn, owner, prepared)
+            elif kind == "note_draft":
+                result = drafts.commit(conn, owner, prepared)
             elif kind == "next":
                 result = quiz.commit_prepared(conn, owner, prepared)
             elif kind == "answer":
@@ -40,15 +46,9 @@ def run_job(store, provider, job_id):
             elif kind == "retry":
                 result = quiz.retry(conn, owner, target, payload["expected_revision"])
             elif kind == "resume":
-                current = records.read(owner, target, "quiz", conn)
-                current["status"] = "in_progress" if current["current"] else "ready"
-                records.put(conn, owner, "quiz", current, expected=payload["expected_revision"])
-                result = {"quizId": target}
+                result = quiz.resume(conn, owner, target, payload["expected_revision"])
             elif kind == "pause":
-                current = records.read(owner, target, "quiz", conn)
-                current["status"] = "paused"
-                records.put(conn, owner, "quiz", current, expected=payload["expected_revision"])
-                result = {"quizId": target}
+                result = quiz.pause(conn, owner, target, payload["expected_revision"])
             elif kind == "challenge":
                 attempt = records.read(owner, target, "attempt", conn)
                 result = quiz.challenge(conn, owner, attempt["presentationId"], payload["reason"])
@@ -96,6 +96,29 @@ def build_learning_router(store_provider, provider_getter):
         MaterialService(db).session(owner, sid)
         return enqueue(tasks, db, owner, sid, "journey", command.model_dump(mode="json"), key)
 
+
+    @router.post("/sessions/{sid}/note-drafts", status_code=202)
+    def create_note_draft(sid: str, command: CreateNoteDraft, tasks: BackgroundTasks, owner=Depends(material_owner), db=Depends(store_provider), key: str = Header(alias="Idempotency-Key", min_length=1, max_length=200)):
+        MaterialService(db).session(owner, sid)
+        return enqueue(tasks, db, owner, sid, "note_draft", command.model_dump(mode="json"), key)
+
+    @router.get("/note-drafts/{draft_id}")
+    def get_note_draft(draft_id: str, owner=Depends(material_owner), db=Depends(store_provider)):
+        return NoteDraftService(db, provider_getter()).get(owner, draft_id)
+
+    @router.post("/note-drafts/{draft_id}/save")
+    def save_note_draft(draft_id: str, owner=Depends(material_owner), db=Depends(store_provider)):
+        return NoteDraftService(db, provider_getter()).save_new(owner, draft_id)
+
+    @router.post("/note-drafts/{draft_id}/replace")
+    def replace_note_draft(draft_id: str, command: NoteDraftReplaceCommand, owner=Depends(material_owner), db=Depends(store_provider)):
+        return NoteDraftService(db, provider_getter()).replace(owner, draft_id, command.expected_note_revision, command.start_offset, command.end_offset)
+
+    @router.post("/note-drafts/{draft_id}/discard")
+    def discard_note_draft(draft_id: str, owner=Depends(material_owner), db=Depends(store_provider)):
+        service = NoteDraftService(db, provider_getter())
+        with db.transaction() as conn:
+            return service.discard(conn, owner, draft_id)
     @router.get("/quizzes")
     def listing(owner=Depends(material_owner), db=Depends(store_provider)):
         records = WorkflowStore(db)

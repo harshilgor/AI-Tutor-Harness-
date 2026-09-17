@@ -1,12 +1,12 @@
 "use client";
 
 import { useCallback, useEffect, useRef, useState, type Dispatch, type SetStateAction } from 'react';
-import { BookOpen, ChevronLeft, FileText, PanelRightClose, Plus, Save, Search, X } from 'lucide-react';
+import { BookOpen, ChevronLeft, FileText, Link2, PanelRightClose, Plus, Save, Search, Send, Unlink, X } from 'lucide-react';
 import { Button } from '@/components/ui/button';
-import { LearningApiError, learningApi, type WorkspaceNote, type WorkspaceNoteSummary } from '@/lib/api';
+import { LearningApiError, learningApi, request, type WorkspaceNote, type WorkspaceNoteLink, type WorkspaceNoteSummary } from '@/lib/api';
 import { QuizWorkspace } from './quiz-workspace';
 import styles from './workspace-panel.module.css';
-import type { WorkspaceNoteSeed } from '@/lib/workspace-events';
+import { createWorkspaceNoteReplacementDraft, mentionWorkspaceNoteExcerpt, WORKSPACE_SOURCE_OPEN_EVENT, type WorkspaceNoteSeed } from '@/lib/workspace-events';
 
 export type WorkspaceTab = 'notes' | 'quiz' | 'sources';
 export type WorkspacePanelLayout = { width: number; collapsed: boolean; tabs: WorkspaceTab[]; activeTab: WorkspaceTab };
@@ -22,6 +22,19 @@ function blankDraft(): NoteDraft {
   return { id: null, title: 'Untitled note', body: '', revision: null, frontmatter: {} };
 }
 
+type SourceBlock = { id: string; versionId: string; pageIndex: number; kind: string; text: string };
+type SourceMaterial = { id: string; title: string; versionId: string; status: string; role: string };
+
+function SourcesPanel({ sourceToOpen }: { sourceToOpen?: { spanId: string; versionId?: string } | null }) {
+  const [materials, setMaterials] = useState<SourceMaterial[]>([]), [blocks, setBlocks] = useState<SourceBlock[]>([]), [active, setActive] = useState<SourceBlock | null>(null), [loading, setLoading] = useState(true), [error, setError] = useState('');
+  const load = useCallback(async () => { setLoading(true); setError(''); try { setMaterials((await request<{ materials: SourceMaterial[] }>('/v1/materials')).materials); } catch (cause) { setError(cause instanceof Error ? cause.message : 'Sources could not be loaded.'); } finally { setLoading(false); } }, []);
+  const openVersion = useCallback(async (versionId: string, spanId?: string) => { try { const result = await request<{ blocks: SourceBlock[] }>(`/v1/material-versions/${encodeURIComponent(versionId)}/blocks`); setBlocks(result.blocks); setActive(spanId ? result.blocks.find(block => block.id === spanId) || result.blocks[0] || null : result.blocks[0] || null); setError(''); } catch (cause) { setError(cause instanceof Error ? cause.message : 'This material passage could not be opened.'); } }, []);
+  useEffect(() => { const timer = window.setTimeout(() => void load(), 0); return () => window.clearTimeout(timer); }, [load]);
+  useEffect(() => { const receive = (event: Event) => { const detail = (event as CustomEvent<{ spanId: string; versionId?: string }>).detail; if (!detail?.spanId) return; if (detail.versionId) { void openVersion(detail.versionId, detail.spanId); return; } void request<SourceBlock>(`/v1/source-spans/${encodeURIComponent(detail.spanId)}`).then(block => openVersion(block.versionId, block.id)).catch(cause => setError(cause instanceof Error ? cause.message : 'This cited passage is no longer available.')); }; window.addEventListener(WORKSPACE_SOURCE_OPEN_EVENT, receive); return () => window.removeEventListener(WORKSPACE_SOURCE_OPEN_EVENT, receive); }, [openVersion]);
+  useEffect(() => { if (!sourceToOpen?.spanId) return; const timer = window.setTimeout(() => { if (sourceToOpen.versionId) void openVersion(sourceToOpen.versionId, sourceToOpen.spanId); else void request<SourceBlock>(`/v1/source-spans/${encodeURIComponent(sourceToOpen.spanId)}`).then(block => openVersion(block.versionId, block.id)).catch(cause => setError(cause instanceof Error ? cause.message : 'This cited passage is no longer available.')); }, 0); return () => window.clearTimeout(timer); }, [openVersion, sourceToOpen]);
+  return <section className={styles.sourcesPanel} aria-label="Sources workspace"><header><div><span>YOUR MATERIALS</span><h2>Sources</h2></div><Button size="sm" variant="ghost" onClick={() => void load()}>Refresh</Button></header><p className={styles.sourceNotice}>Only passages you attach and select are provided as tutor or quiz context. Coverage can be limited.</p><div className={styles.sourceLayout}><div className={styles.sourceList}>{loading ? <p>Loading sources…</p> : materials.length ? materials.map(material => <button type="button" key={material.versionId} onClick={() => void openVersion(material.versionId)}><strong>{material.title}</strong><small>{material.status.replaceAll('_', ' ')} · {material.role.replaceAll('_', ' ')}</small></button>) : <p>No uploaded sources yet. Attach a text-based file in chat to inspect its passages here.</p>}</div><div className={styles.sourceDetail}>{active ? <><p className={styles.sourceMeta}>Passage · Page {active.pageIndex + 1}</p><pre>{active.text}</pre><p className={styles.sourceNotice}>This is extracted text. Layout and claims are not independently verified.</p></> : blocks.length ? <div>{blocks.map(block => <button className={styles.passageButton} type="button" key={block.id} onClick={() => setActive(block)}>Page {block.pageIndex + 1} · {block.text.slice(0, 100)}…</button>)}</div> : <div className={styles.comingSoon}><BookOpen size={26} /><h2>Inspect support</h2><p>Select a source or citation to see the exact passage behind it.</p></div>}</div></div>{error ? <p className={styles.error} role="alert">{error}</p> : null}</section>;
+}
+
 function NoteEditor({ closeRequest, onClose, onCloseRequestHandled, onDirtyChange, seed, onSeedConsumed, noteToOpen, onNoteOpenConsumed }: { closeRequest: boolean; onClose: () => void; onCloseRequestHandled: () => void; onDirtyChange: (dirty: boolean) => void; seed: WorkspaceNoteSeed | null; onSeedConsumed: (id: string) => void; noteToOpen: string | null; onNoteOpenConsumed: (noteId: string) => void }) {
   const [notes, setNotes] = useState<WorkspaceNoteSummary[]>([]);
   const [draft, setDraft] = useState<NoteDraft | null>(null);
@@ -31,7 +44,13 @@ function NoteEditor({ closeRequest, onClose, onCloseRequestHandled, onDirtyChang
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState('');
   const [pendingAction, setPendingAction] = useState<(() => void) | null>(null);
+  const [links, setLinks] = useState<WorkspaceNoteLink[]>([]);
+  const [backlinks, setBacklinks] = useState<WorkspaceNoteLink[]>([]);
+  const [linkQuery, setLinkQuery] = useState('');
+  const [linkMatches, setLinkMatches] = useState<WorkspaceNoteSummary[]>([]);
+  const [linkBusy, setLinkBusy] = useState(false);
   const requestId = useRef(0);
+  const bodyInput = useRef<HTMLTextAreaElement | null>(null);
   const consumedSeeds = useRef(new Set<string>());
   const consumedOpenNotes = useRef(new Set<string>());
 
@@ -57,6 +76,19 @@ function NoteEditor({ closeRequest, onClose, onCloseRequestHandled, onDirtyChang
       if (currentRequest === requestId.current) setLoading(false);
     }
   }
+
+  const loadRelationships = useCallback(async (noteId: string) => {
+    try {
+      const [outgoing, incoming] = await Promise.all([
+        learningApi.listWorkspaceNoteLinks(noteId),
+        learningApi.listWorkspaceNoteBacklinks(noteId),
+      ]);
+      setLinks(outgoing.links);
+      setBacklinks(incoming.links);
+    } catch (cause) {
+      setError(cause instanceof Error ? cause.message : 'Note links could not be loaded.');
+    }
+  }, []);
 
   useEffect(() => {
     const timer = window.setTimeout(() => void loadNotes(query), 180);
@@ -100,10 +132,11 @@ function NoteEditor({ closeRequest, onClose, onCloseRequestHandled, onDirtyChang
       const note = await learningApi.getWorkspaceNote(noteId);
       setDraft(toDraft(note));
       setSavedDraft(toDraft(note));
+      void loadRelationships(noteId);
     } catch (cause) {
       setError(cause instanceof Error ? cause.message : 'The note could not be opened.');
     } finally { setLoading(false); }
-  }, []);
+  }, [loadRelationships]);
 
   function openNote(noteId: string) {
     confirmBefore(() => { void loadNote(noteId); });
@@ -144,6 +177,68 @@ function NoteEditor({ closeRequest, onClose, onCloseRequestHandled, onDirtyChang
     return false;
   }
 
+  useEffect(() => {
+    if (!draft?.id || !linkQuery.trim()) return;
+    const timer = window.setTimeout(() => {
+      void learningApi.searchWorkspaceNotes(linkQuery).then(result => {
+        setLinkMatches(result.notes.filter(note => note.id !== draft.id && !links.some(link => link.targetType === 'note' && link.targetId === note.id)).slice(0, 5));
+      }).catch(() => setLinkMatches([]));
+    }, 150);
+    return () => window.clearTimeout(timer);
+  }, [draft?.id, linkQuery, links]);
+
+  async function addNoteLink(target: WorkspaceNoteSummary) {
+    if (!draft?.id || !draft.revision || dirty || linkBusy) {
+      setError(dirty ? 'Save this note before adding a link.' : 'Save the note before adding links.');
+      return;
+    }
+    setLinkBusy(true); setError('');
+    try {
+      await learningApi.createWorkspaceNoteLink(draft.id, { expectedRevision: draft.revision, targetType: 'note', targetId: target.id, label: target.title });
+      await loadNote(draft.id);
+      setLinkQuery(''); setLinkMatches([]);
+    } catch (cause) { setError(cause instanceof Error ? cause.message : 'The link could not be added.'); }
+    finally { setLinkBusy(false); }
+  }
+
+  async function removeLink(link: WorkspaceNoteLink) {
+    if (!draft?.id || !draft.revision || dirty || linkBusy) {
+      setError(dirty ? 'Save this note before changing its links.' : 'The link cannot be changed yet.');
+      return;
+    }
+    setLinkBusy(true); setError('');
+    try {
+      await learningApi.deleteWorkspaceNoteLink(draft.id, link.id, draft.revision);
+      await loadNote(draft.id);
+    } catch (cause) { setError(cause instanceof Error ? cause.message : 'The link could not be removed.'); }
+    finally { setLinkBusy(false); }
+  }
+
+  function createReplacementDraft() {
+    if (!draft?.id || !draft.revision || !bodyInput.current) { setError('Save this note before creating a replacement draft.'); return; }
+    const { selectionStart, selectionEnd } = bodyInput.current;
+    if (selectionStart === selectionEnd) { setError('Select the note section you want to replace first.'); return; }
+    createWorkspaceNoteReplacementDraft({ noteId: draft.id, title: draft.title, revision: draft.revision, startOffset: selectionStart, endOffset: selectionEnd });
+    setError('Choose the lesson or quiz feedback in chat that should create this replacement draft.');
+  }
+  function mentionSelectedExcerpt() {
+    if (!draft?.id || !draft.revision || !bodyInput.current) {
+      setError('Save this note before using it as chat context.');
+      return;
+    }
+    const { selectionStart, selectionEnd } = bodyInput.current;
+    if (selectionStart === selectionEnd) {
+      setError('Select the exact passage you want to send to the tutor.');
+      return;
+    }
+    if (draft.body.slice(selectionStart, selectionEnd).length > 6000) {
+      setError('Select at most 6,000 characters to send as context.');
+      return;
+    }
+    mentionWorkspaceNoteExcerpt({ noteId: draft.id, title: draft.title, revision: draft.revision, startOffset: selectionStart, endOffset: selectionEnd, excerpt: draft.body.slice(selectionStart, selectionEnd) });
+    setError('Selected passage added to chat context.');
+  }
+
   return <section className={styles.notes} aria-label="Notes workspace">
     <div className={styles.noteList}>
       <div className={styles.noteListTop}>
@@ -165,7 +260,19 @@ function NoteEditor({ closeRequest, onClose, onCloseRequestHandled, onDirtyChang
           <Button type="button" size="sm" disabled={saving || !dirty} onClick={() => void save()}><Save size={15} />{saving ? 'Saving' : 'Save'}</Button>
         </div>
         <div className={styles.status} role="status">{saving ? 'Saving…' : dirty ? 'Unsaved changes' : draft.id ? 'Saved locally' : 'New note — not saved yet'}</div>
-        <textarea value={draft.body} onChange={event => setDraft(current => current ? { ...current, body: event.target.value } : current)} placeholder="Write in Markdown…" aria-label="Note body" spellCheck />
+        <textarea ref={bodyInput} value={draft.body} onChange={event => setDraft(current => current ? { ...current, body: event.target.value } : current)} placeholder="Write in Markdown…" aria-label="Note body" spellCheck />
+        {draft.id ? <section className={styles.noteContextTools} aria-label="Use note in chat">
+          <p>Select text in the note, then add only that excerpt to chat.</p>
+          <div><Button type="button" size="sm" variant="outline" disabled={dirty} onClick={mentionSelectedExcerpt}><Send size={14} />Use selected text in chat</Button><Button type="button" size="sm" variant="ghost" disabled={dirty} onClick={createReplacementDraft}>Create replacement draft</Button></div>
+        </section> : null}
+        {draft.id ? <section className={styles.linkPanel} aria-label="Note links">
+          <div className={styles.linkHeading}><Link2 size={14} /><strong>Links</strong></div>
+          <div className={styles.linkSearch}><Search size={13} /><input value={linkQuery} disabled={dirty || linkBusy} onChange={event => setLinkQuery(event.target.value)} placeholder={dirty ? 'Save before linking' : 'Link another note'} aria-label="Search notes to link" /></div>
+          {linkQuery.trim() && linkMatches.length ? <div className={styles.linkMatches} role="listbox" aria-label="Matching notes">{linkMatches.map(note => <button key={note.id} type="button" role="option" aria-selected="false" onClick={() => void addNoteLink(note)}><span>{note.title}</span><Plus size={14} /></button>)}</div> : null}
+          {links.length ? <ul className={styles.linkList}>{links.map(link => <li key={link.id} className={link.targetStatus === 'broken' ? styles.brokenLink : ''}><span><Link2 size={13} />{link.label || link.targetId}{link.targetStatus === 'broken' ? <small>Missing target · remove this link or link a replacement above.</small> : null}</span>{link.targetType === 'note' && link.targetStatus === 'available' ? <button type="button" onClick={() => openNote(link.targetId)} aria-label={`Open ${link.label || 'linked note'}`}>Open</button> : null}<button type="button" disabled={dirty || linkBusy} onClick={() => void removeLink(link)} aria-label={`Remove link to ${link.label || link.targetId}`}><Unlink size={13} /></button></li>)}</ul> : <p className={styles.linkEmpty}>No links yet.</p>}
+          <div className={styles.linkHeading}><Link2 size={14} /><strong>Backlinks</strong></div>
+          {backlinks.length ? <ul className={styles.linkList}>{backlinks.map(link => <li key={link.id} className={link.sourceStatus === 'broken' ? styles.brokenLink : ''}><span>{link.sourceStatus === 'broken' ? <>Missing source note<small>The original note was removed.</small></> : `From note ${link.sourceNoteId.slice(-8)}`}</span>{link.sourceStatus === 'available' ? <button type="button" onClick={() => openNote(link.sourceNoteId)}>Open</button> : null}</li>)}</ul> : <p className={styles.linkEmpty}>Nothing links here yet.</p>}
+        </section> : null}
       </>}
       {error ? <p role="alert" className={styles.error}>{error}</p> : null}
     </div>
@@ -173,7 +280,7 @@ function NoteEditor({ closeRequest, onClose, onCloseRequestHandled, onDirtyChang
   </section>;
 }
 
-export function WorkspacePanel({ quizSessionId, quizConceptId, layout, onLayoutChange, onCollapse, onExpand, noteSeed, noteToOpen, onNoteSeedConsumed, onNoteOpenConsumed }: {
+export function WorkspacePanel({ quizSessionId, quizConceptId, layout, onLayoutChange, onCollapse, onExpand, noteSeed, noteToOpen, sourceToOpen, onNoteSeedConsumed, onNoteOpenConsumed }: {
   quizSessionId?: string | null;
   quizConceptId?: string;
   layout: WorkspacePanelLayout;
@@ -182,6 +289,7 @@ export function WorkspacePanel({ quizSessionId, quizConceptId, layout, onLayoutC
   onExpand: () => void;
   noteSeed: WorkspaceNoteSeed | null;
   noteToOpen: string | null;
+  sourceToOpen?: { spanId: string; versionId?: string } | null;
   onNoteSeedConsumed: (id: string) => void;
   onNoteOpenConsumed: (noteId: string) => void;
 }) {
@@ -221,7 +329,7 @@ export function WorkspacePanel({ quizSessionId, quizConceptId, layout, onLayoutC
       <div className={styles.content}>
         {active === 'notes' ? <NoteEditor closeRequest={noteCloseRequest} onDirtyChange={setNotesDirty} seed={noteSeed} onSeedConsumed={onNoteSeedConsumed} noteToOpen={noteToOpen} onNoteOpenConsumed={onNoteOpenConsumed} onCloseRequestHandled={() => setNoteCloseRequest(false)} onClose={() => { setNoteCloseRequest(false); removeActiveTab(); }} /> : null}
         {active === 'quiz' ? <QuizWorkspace sessionId={quizSessionId} conceptId={quizConceptId} inline /> : null}
-        {active === 'sources' ? <div className={styles.comingSoon}><BookOpen size={26} /><h2>Sources</h2><p>Open a lesson citation or attached material to inspect it here. Source context stays explicit and does not silently enter a tutor request.</p></div> : null}
+        {active === 'sources' ? <SourcesPanel sourceToOpen={sourceToOpen} /> : null}
       </div>
     </>}
   </aside>;

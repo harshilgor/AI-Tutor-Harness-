@@ -386,6 +386,22 @@ export type WorkspaceNoteInput = {
   frontmatter?: Record<string, unknown>;
 };
 
+export type WorkspaceNoteLinkTargetType = 'note' | 'concept' | 'lesson_block' | 'attempt' | 'source_passage';
+export type WorkspaceNoteLink = {
+  id: string;
+  learnerId: string;
+  sourceNoteId: string;
+  targetType: WorkspaceNoteLinkTargetType;
+  targetId: string;
+  label?: string | null;
+  sourceStatus: 'available' | 'broken';
+  targetStatus: 'available' | 'broken';
+  createdAt: string;
+};
+
+export type NoteDraftAnchor = { kind: 'lesson_block' | 'quiz_attempt' | 'note_excerpt' | 'material_passage'; id: string; label: string };
+export type NoteDraft = { id: string; sessionId: string; status: 'ready' | 'saved' | 'replaced' | 'discarded'; generatedLabel: 'ai_generated_draft'; title: string; body: string; proposedTags: string[]; proposedLinks: NoteDraftAnchor[]; sourceAnchors: NoteDraftAnchor[]; originKind: string; originReference: string; replacement?: { noteId: string; expectedRevision: number; startOffset: number; endOffset: number } | null; provider: string; createdAt: string };
+export type CreateNoteDraftInput = { originKind: 'lesson' | 'selection' | 'quiz_feedback' | 'mentioned_notes'; lessonId?: string; blockId?: string; selectedText?: string; quizAttemptId?: string; noteContext?: { notes: { noteId: string; expectedRevision?: number; startOffset?: number; endOffset?: number }[] }; replacement?: { noteId: string; expectedRevision: number; startOffset: number; endOffset: number } };
 export const learningApi = {
   async createBaselineGraph(input: { topic: string; objective?: string; depth?: 'overview' | 'introductory' | 'deep' }, options?: { signal?: AbortSignal; idempotencyKey?: string }): Promise<BaselineGraphResponse> {
     const scope = await request<{ id: string }>('/v1/topic-scopes', {
@@ -534,6 +550,42 @@ export const learningApi = {
     });
   },
 
+  listWorkspaceNoteLinks(noteId: string, learnerId = 'local'): Promise<{ links: WorkspaceNoteLink[] }> {
+    return request<{ links: WorkspaceNoteLink[] }>(`/v1/learners/${encodeURIComponent(learnerId)}/workspace-notes/${encodeURIComponent(noteId)}/links`, {
+      headers: { 'X-Dev-Learner-Id': learnerId },
+    });
+  },
+
+  listWorkspaceNoteBacklinks(noteId: string, learnerId = 'local'): Promise<{ links: WorkspaceNoteLink[] }> {
+    return request<{ links: WorkspaceNoteLink[] }>(`/v1/learners/${encodeURIComponent(learnerId)}/workspace-note-links/backlinks/note/${encodeURIComponent(noteId)}`, {
+      headers: { 'X-Dev-Learner-Id': learnerId },
+    });
+  },
+
+  createWorkspaceNoteLink(noteId: string, input: { expectedRevision: number; targetType: WorkspaceNoteLinkTargetType; targetId: string; label?: string }, learnerId = 'local'): Promise<WorkspaceNoteLink> {
+    return request<WorkspaceNoteLink>(`/v1/learners/${encodeURIComponent(learnerId)}/workspace-notes/${encodeURIComponent(noteId)}/links`, {
+      method: 'POST', headers: { 'X-Dev-Learner-Id': learnerId }, body: JSON.stringify(input),
+    });
+  },
+
+  deleteWorkspaceNoteLink(noteId: string, linkId: string, expectedRevision: number, learnerId = 'local'): Promise<void> {
+    return request<void>(`/v1/learners/${encodeURIComponent(learnerId)}/workspace-notes/${encodeURIComponent(noteId)}/links/${encodeURIComponent(linkId)}?${new URLSearchParams({ expectedRevision: String(expectedRevision) })}`, {
+      method: 'DELETE', headers: { 'X-Dev-Learner-Id': learnerId },
+    });
+  },
+
+  getNoteDraft(draftId: string): Promise<NoteDraft> { return request<NoteDraft>(`/v1/note-drafts/${encodeURIComponent(draftId)}`); },
+  saveNoteDraft(draftId: string): Promise<{ noteDraftId: string; noteId: string }> { return request(`/v1/note-drafts/${encodeURIComponent(draftId)}/save`, { method: 'POST' }); },
+  replaceNoteDraft(draftId: string, input: { expectedNoteRevision: number; startOffset: number; endOffset: number }): Promise<{ noteDraftId: string; noteId: string }> { return request(`/v1/note-drafts/${encodeURIComponent(draftId)}/replace`, { method: 'POST', body: JSON.stringify(input) }); },
+  discardNoteDraft(draftId: string): Promise<{ noteDraftId: string }> { return request(`/v1/note-drafts/${encodeURIComponent(draftId)}/discard`, { method: 'POST' }); },
+
+  getRecommendations(sessionId: string, learnerId = 'local'): Promise<RecommendationSet> {
+    return request<RecommendationSet>(`/v1/sessions/${encodeURIComponent(sessionId)}/recommendations`, { headers: { 'X-Dev-Learner-Id': learnerId } });
+  },
+
+  recordRecommendationInteraction(recommendationId: string, eventType: 'impression' | 'selection' | 'dismissal' | 'completion' | 'failure', learnerId = 'local', idempotencyKey = crypto.randomUUID()): Promise<void> {
+    return request<void>(`/v1/recommendations/${encodeURIComponent(recommendationId)}/interactions`, { method: 'POST', headers: { 'X-Dev-Learner-Id': learnerId, 'Idempotency-Key': idempotencyKey }, body: JSON.stringify({ eventType }) });
+  },
   exportLocalData(learnerId = 'local'): Promise<LocalDataExport> {
     return request<LocalDataExport>(`/v1/learners/${encodeURIComponent(learnerId)}/export`);
   },
@@ -542,3 +594,7 @@ export const learningApi = {
     return request<{ deleted: Record<string, number>; total: number }>(`/v1/learners/${encodeURIComponent(learnerId)}/data`, { method: 'DELETE' });
   },
 };
+
+export type NextActionKind = 'learn' | 'ask' | 'quiz' | 'review';
+export type NextActionRecommendation = { id: string; actionKind: NextActionKind; title: string; rationale: string; conceptId?: string | null; conceptTitle?: string | null; effortMinutes: number; context: Record<string, string>; score: number };
+export type RecommendationSet = { id: string; sessionId: string; policyVersion: string; createdAt: string; recommendations: NextActionRecommendation[] };

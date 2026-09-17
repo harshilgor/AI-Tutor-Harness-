@@ -50,6 +50,7 @@ from .privacy_routes import build_privacy_router
 from .workspace_note_routes import build_workspace_note_router
 from .workspace_note_context import WorkspaceNoteContextService
 from .workspace_note_service import WorkspaceNoteError
+from .recommendation_routes import build_recommendation_router
 
 app = FastAPI(title="AI Tutor Harness API", version="0.1.0")
 local_web_origin = os.getenv("FORMA_WEB_ORIGIN", "http://127.0.0.1:3000")
@@ -88,6 +89,7 @@ app.include_router(build_material_router(get_store, lambda: lesson_provider))
 app.include_router(build_learning_router(get_store, lambda: lesson_provider))
 app.include_router(build_privacy_router(get_store))
 app.include_router(build_workspace_note_router(get_store))
+app.include_router(build_recommendation_router(get_store))
 
 
 @app.get("/health")
@@ -181,6 +183,13 @@ def _event(db: Store, action_id: str, sequence: int, event_type: str, data: dict
 def create_learning_session(request: SessionCreate, db: Store = Depends(get_store)) -> LearningSession:
     """Pin a learning session to a graph revision for resumable actions."""
     graph_id = request.graph_id
+    if request.domain_pack_id:
+        from .domain_pack import get_pack, graph_for_pack
+        pack = get_pack(request.domain_pack_id, request.domain_pack_version)
+        graph = graph_for_pack(pack)
+        if db.get_graph(graph.id) is None:
+            db.save_graph(graph)
+        graph_id = graph.id
     if graph_id is None and request.topic:
         scope = TopicScope(
             id=f"scope_{uuid4().hex}",
@@ -204,6 +213,8 @@ def create_learning_session(request: SessionCreate, db: Store = Depends(get_stor
         learner_id=request.learner_id,
         graph_id=graph.id,
         graph_revision=request.graph_revision or graph.version,
+        domain_pack_id=request.domain_pack_id,
+        domain_pack_version=pack["version"] if request.domain_pack_id else None,
         goal=request.goal,
         gear=request.gear,
         created_at=utc_now(),
@@ -225,6 +236,15 @@ def create_learning_session(request: SessionCreate, db: Store = Depends(get_stor
         ),
     )
     return session
+
+
+@app.get("/v1/domain-packs")
+def list_domain_packs():
+    from .domain_pack import packs, validate_pack
+    result = packs()
+    for pack in result:
+        validate_pack(pack)
+    return {"packs": result}
 
 
 @app.get("/v1/sessions/{session_id}", response_model=LearningSession)

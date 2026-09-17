@@ -16,6 +16,7 @@ def material_owner(x_learner_id: str | None = Header(default=None, alias="X-Dev-
 
 class MaterialQuestion(BaseModel):
     message: str = Field(min_length=1, max_length=4000)
+    selected_span_ids: list[str] = Field(default_factory=list, max_length=6, validation_alias="selectedSpanIds")
 
 
 def build_material_router(store_provider, provider_getter=lambda: None):
@@ -27,8 +28,8 @@ def build_material_router(store_provider, provider_getter=lambda: None):
     def answer(sid: str, request: MaterialQuestion, owner=Depends(material_owner), svc=Depends(service)):
         from .context_service import retrieve, save_manifest, canonical_evidence
         from .model_provider import ModelProviderError
-        spans = retrieve(svc.store, owner, sid, request.message)
-        manifest = save_manifest(svc.store, owner, sid, request.message, spans)
+        spans = retrieve(svc.store, owner, sid, request.message, selected_span_ids=request.selected_span_ids)
+        manifest = save_manifest(svc.store, owner, sid, request.message, spans, selected_span_ids=request.selected_span_ids)
         if not spans:
             return {"contextId": manifest["id"], "blocks": [], "sources": [], "status": "insufficient_evidence", "message": "No matching readable passages were found. Try specific terms from the material or inspect its extraction status."}
         provider = provider_getter()

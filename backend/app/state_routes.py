@@ -16,6 +16,9 @@ from .state_models import (
     EvidenceAdmissionResponse,
     EvidenceCreate,
     EvidenceRecord,
+    EvidenceChallenge,
+    EvidenceChallengeCreate,
+    ConceptStateExplanation,
     LearnerStateResponse,
     NoteCreate,
     NoteRecord,
@@ -24,6 +27,7 @@ from .state_models import (
     ReviewSchedule,
     StateEvent,
     StateEventCreate,
+    TimelinePage,
 )
 from .state_service import LearnerStateService, StateServiceError
 
@@ -61,6 +65,21 @@ def build_state_router(store_provider: Any) -> APIRouter:
     def get_state(learner_id: str = learner_path(), x_dev_learner_id: str | None = Header(default=None, alias="X-Dev-Learner-Id")) -> LearnerStateResponse:
         authorize(learner_id, x_dev_learner_id)
         return service().get_state(learner_id)
+
+    @router.get("/learners/{learner_id}/state/{concept_id}/explanation", response_model=ConceptStateExplanation)
+    def explain_state(concept_id: str, learner_id: str = learner_path(), x_dev_learner_id: str | None = Header(default=None, alias="X-Dev-Learner-Id")) -> ConceptStateExplanation:
+        authorize(learner_id, x_dev_learner_id)
+        return translate(lambda: service().explain_state(learner_id, concept_id))
+
+    @router.get("/learners/{learner_id}/timeline", response_model=TimelinePage)
+    def timeline(learner_id: str = learner_path(), cursor: str | None = Query(default=None, max_length=400), limit: int = Query(default=30, ge=1, le=100), x_dev_learner_id: str | None = Header(default=None, alias="X-Dev-Learner-Id")) -> TimelinePage:
+        authorize(learner_id, x_dev_learner_id)
+        return translate(lambda: service().timeline(learner_id, cursor, limit))
+
+    @router.post("/learners/{learner_id}/evidence/{evidence_id}/challenge", response_model=EvidenceChallenge, status_code=status.HTTP_201_CREATED)
+    def challenge_evidence(request: EvidenceChallengeCreate, evidence_id: str, learner_id: str = learner_path(), x_dev_learner_id: str | None = Header(default=None, alias="X-Dev-Learner-Id")) -> EvidenceChallenge:
+        authorize(learner_id, x_dev_learner_id)
+        return translate(lambda: service().challenge_evidence(learner_id, evidence_id, request.reason))
 
     @router.post("/learners/{learner_id}/events", response_model=StateEvent, status_code=status.HTTP_201_CREATED)
     def append_event(request: StateEventCreate, learner_id: str = learner_path(),

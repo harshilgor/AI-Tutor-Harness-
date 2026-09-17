@@ -19,10 +19,11 @@ export type Attempt = {
 };
 export type Quiz = {
   id: string; sessionId: string; title: string; revision: number; status: string; count: number;
+  mode: 'topic_drill' | 'timed_short_quiz'; modeConfig: { duration_seconds?: number }; deadlineAt: string | null; remainingSeconds: number | null;
   current: Presentation | null; attempts: Attempt[];
   summary: { score: number | null; evaluated: number; attempted: number; total: number; assisted: number; skipped: number; dontKnow: number; independentCorrect: number; retries: number; contested: number };
 };
-type Job = { id: string; status: 'queued' | 'running' | 'completed' | 'failed' | 'cancelled'; result: { quizId?: string; sessionId?: string; message?: string } | null };
+type Job = { id: string; status: 'queued' | 'running' | 'completed' | 'failed' | 'cancelled'; result: { quizId?: string; sessionId?: string; noteDraftId?: string; noteId?: string; message?: string } | null };
 export const getJourney = (sid: string) => request<Journey>(`/v1/sessions/${sid}/journey`);
 export const getQuiz = (qid: string) => request<Quiz>(`/v1/quizzes/${qid}`);
 
