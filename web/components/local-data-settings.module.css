@@ -3,3 +3,4 @@
 .callout svg { flex: 0 0 auto; margin-top: 2px; color: #718568; }
 .actions { display: flex; flex-wrap: wrap; gap: 10px; }
 .message { margin: 0; color: #687761; font-size: 13px; }
+.file { display: none; }

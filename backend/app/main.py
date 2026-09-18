@@ -51,6 +51,7 @@ from .workspace_note_routes import build_workspace_note_router
 from .workspace_note_context import WorkspaceNoteContextService
 from .workspace_note_service import WorkspaceNoteError
 from .recommendation_routes import build_recommendation_router
+from .backup_routes import build_backup_router
 
 app = FastAPI(title="AI Tutor Harness API", version="0.1.0")
 local_web_origin = os.getenv("FORMA_WEB_ORIGIN", "http://127.0.0.1:3000")
@@ -90,6 +91,7 @@ app.include_router(build_learning_router(get_store, lambda: lesson_provider))
 app.include_router(build_privacy_router(get_store))
 app.include_router(build_workspace_note_router(get_store))
 app.include_router(build_recommendation_router(get_store))
+app.include_router(build_backup_router(get_store))
 
 
 @app.get("/health")

@@ -166,3 +166,10 @@ Run validation with:
 python -m pytest backend/tests -q
 python -m compileall -q backend/app backend/migrations
 ```
+
+`python -m app.evaluation_runner` emits deterministic, machine-readable policy
+fixtures without provider calls or credentials. `/v1/local-backup` creates a
+checksummed archive of local SQLite records, vault Markdown, and owned material
+objects only; it never reads credential storage, desktop tokens, environment
+variables, or logs. Restore requires preflight and explicit replacement when
+local data already exists.

@@ -593,6 +593,13 @@ export const learningApi = {
   deleteLocalData(learnerId = 'local'): Promise<{ deleted: Record<string, number>; total: number }> {
     return request<{ deleted: Record<string, number>; total: number }>(`/v1/learners/${encodeURIComponent(learnerId)}/data`, { method: 'DELETE' });
   },
+  createLocalBackup(): Promise<{ format: string; archiveBase64: string }> { return request('/v1/local-backup'); },
+  preflightLocalBackup(archiveBase64: string): Promise<{ archiveVersion: number; recordCount: number; fileCount: number; existingRecordCount: number; requiresReplaceConfirmation: boolean }> {
+    return request('/v1/local-backup/preflight', { method: 'POST', body: JSON.stringify({ archiveBase64 }) });
+  },
+  restoreLocalBackup(archiveBase64: string, confirmReplace: boolean): Promise<{ restored: number; files: number }> {
+    return request('/v1/local-backup/restore', { method: 'POST', body: JSON.stringify({ archiveBase64, confirmReplace }) });
+  },
 };
 
 export type NextActionKind = 'learn' | 'ask' | 'quiz' | 'review';

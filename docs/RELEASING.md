@@ -46,3 +46,9 @@ For each source build:
 ## Rollback
 
 The beta has no automatic updater. Stop Forma, restore the copied application-data directory, then reinstall the previously tested installer. Do not delete learner data during an uninstall: local data is intentionally preserved. If a migration cannot be reversed safely, restore the backup instead of opening the older build against the newer database.
+
+## Package 8 release gates
+
+Run `python -m app.evaluation_runner` and the archive/restore tests without provider credentials. Run packaged-web and local-runtime smoke checks on a fresh application-data fixture, then repeat after installing the next build over it. Verify that the page, CSS and JavaScript load and that notes, materials, export, delete and restore survive the upgrade.
+
+Publishing remains manual: maintainers must validate version and checksums, sign the Windows installer, sign and notarize both macOS architectures, verify Gatekeeper/SmartScreen on clean machines, and only then create the GitHub Release with installers, checksums, migration notes and rollback guidance. No automation may publish or bypass signing/notarization without release credentials.

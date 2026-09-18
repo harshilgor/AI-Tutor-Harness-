@@ -38,6 +38,12 @@ async function main() {
     if (stylesheet.status !== 200) throw new Error(`Expected stylesheet status 200, received ${stylesheet.status} for ${match[1]}.`);
     if (!String(stylesheet.headers['content-type']).startsWith('text/css')) throw new Error(`Expected a CSS content type, received ${stylesheet.headers['content-type']}.`);
     if (!stylesheet.body.trim()) throw new Error('The packaged stylesheet was empty.');
+    const scriptMatch = page.body.match(/src=["']([^"']*\/_next\/[^"']+\.js[^"']*)["']/i);
+    if (!scriptMatch) throw new Error('The packaged homepage did not reference a JavaScript asset.');
+    const script = await request(port, scriptMatch[1]);
+    if (script.status !== 200) throw new Error(`Expected JavaScript status 200, received ${script.status} for ${scriptMatch[1]}.`);
+    if (!String(script.headers['content-type']).includes('javascript')) throw new Error(`Expected a JavaScript content type, received ${script.headers['content-type']}.`);
+    if (!script.body.trim()) throw new Error('The packaged JavaScript asset was empty.');
     console.log(`Packaged web smoke test passed: ${match[1]}`);
   } finally {
     await new Promise(resolve => server.close(resolve));
