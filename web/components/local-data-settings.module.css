@@ -2,5 +2,7 @@
 .callout { display: flex; gap: 10px; align-items: flex-start; padding: 13px; border: 1px solid #e0e6da; border-radius: 9px; background: #f6f8f3; color: #5f6c59; font-size: 13px; line-height: 1.55; }
 .callout svg { flex: 0 0 auto; margin-top: 2px; color: #718568; }
 .actions { display: flex; flex-wrap: wrap; gap: 10px; }
+.update { display: flex; align-items: center; justify-content: space-between; gap: 16px; padding: 14px; border: 1px solid #dfe6d9; border-radius: 9px; background: #fafcf8; }
+.update p { margin: 4px 0 0; color: #687761; font-size: 13px; line-height: 1.45; }
 .message { margin: 0; color: #687761; font-size: 13px; }
 .file { display: none; }

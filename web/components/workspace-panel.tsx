@@ -35,7 +35,7 @@ function SourcesPanel({ sourceToOpen }: { sourceToOpen?: { spanId: string; versi
   return <section className={styles.sourcesPanel} aria-label="Sources workspace"><header><div><span>YOUR MATERIALS</span><h2>Sources</h2></div><Button size="sm" variant="ghost" onClick={() => void load()}>Refresh</Button></header><p className={styles.sourceNotice}>Only passages you attach and select are provided as tutor or quiz context. Coverage can be limited.</p><div className={styles.sourceLayout}><div className={styles.sourceList}>{loading ? <p>Loading sources…</p> : materials.length ? materials.map(material => <button type="button" key={material.versionId} onClick={() => void openVersion(material.versionId)}><strong>{material.title}</strong><small>{material.status.replaceAll('_', ' ')} · {material.role.replaceAll('_', ' ')}</small></button>) : <p>No uploaded sources yet. Attach a text-based file in chat to inspect its passages here.</p>}</div><div className={styles.sourceDetail}>{active ? <><p className={styles.sourceMeta}>Passage · Page {active.pageIndex + 1}</p><pre>{active.text}</pre><p className={styles.sourceNotice}>This is extracted text. Layout and claims are not independently verified.</p></> : blocks.length ? <div>{blocks.map(block => <button className={styles.passageButton} type="button" key={block.id} onClick={() => setActive(block)}>Page {block.pageIndex + 1} · {block.text.slice(0, 100)}…</button>)}</div> : <div className={styles.comingSoon}><BookOpen size={26} /><h2>Inspect support</h2><p>Select a source or citation to see the exact passage behind it.</p></div>}</div></div>{error ? <p className={styles.error} role="alert">{error}</p> : null}</section>;
 }
 
-function NoteEditor({ closeRequest, onClose, onCloseRequestHandled, onDirtyChange, seed, onSeedConsumed, noteToOpen, onNoteOpenConsumed }: { closeRequest: boolean; onClose: () => void; onCloseRequestHandled: () => void; onDirtyChange: (dirty: boolean) => void; seed: WorkspaceNoteSeed | null; onSeedConsumed: (id: string) => void; noteToOpen: string | null; onNoteOpenConsumed: (noteId: string) => void }) {
+function NoteEditor({ closeRequest, onClose, onCloseRequestHandled, onDirtyChange, seed, onSeedConsumed, noteToOpen, onNoteOpenConsumed, fullPage = false, onUseInChat }: { closeRequest: boolean; onClose: () => void; onCloseRequestHandled: () => void; onDirtyChange: (dirty: boolean) => void; seed: WorkspaceNoteSeed | null; onSeedConsumed: (id: string) => void; noteToOpen: string | null; onNoteOpenConsumed: (noteId: string) => void; fullPage?: boolean; onUseInChat?: () => void }) {
   const [notes, setNotes] = useState<WorkspaceNoteSummary[]>([]);
   const [draft, setDraft] = useState<NoteDraft | null>(null);
   const [savedDraft, setSavedDraft] = useState<NoteDraft | null>(null);
@@ -237,9 +237,10 @@ function NoteEditor({ closeRequest, onClose, onCloseRequestHandled, onDirtyChang
     }
     mentionWorkspaceNoteExcerpt({ noteId: draft.id, title: draft.title, revision: draft.revision, startOffset: selectionStart, endOffset: selectionEnd, excerpt: draft.body.slice(selectionStart, selectionEnd) });
     setError('Selected passage added to chat context.');
+    onUseInChat?.();
   }
 
-  return <section className={styles.notes} aria-label="Notes workspace">
+  return <section className={`${styles.notes} ${fullPage ? styles.notesHome : ''}`} aria-label="Notes workspace">
     <div className={styles.noteList}>
       <div className={styles.noteListTop}>
         <div className={styles.search}><Search size={15} /><input value={query} onChange={event => setQuery(event.target.value)} placeholder="Search notes" aria-label="Search notes" /></div>
@@ -278,6 +279,12 @@ function NoteEditor({ closeRequest, onClose, onCloseRequestHandled, onDirtyChang
     </div>
     {pendingAction ? <div className={styles.confirm} role="dialog" aria-modal="true" aria-label="Unsaved note changes"><div><h2>Keep your changes?</h2><p>Save this note before switching, or discard the unsaved edits.</p><div><Button type="button" variant="outline" onClick={() => { setPendingAction(null); onCloseRequestHandled(); }}>Keep editing</Button><Button type="button" variant="ghost" onClick={() => { setPendingAction(null); onCloseRequestHandled(); pendingAction(); }}>Discard</Button><Button type="button" onClick={() => void save().then(saved => { if (saved) { setPendingAction(null); onCloseRequestHandled(); pendingAction(); } })}>Save changes</Button></div></div></div> : null}
   </section>;
+}
+
+/** Full notes destination. The chat side panel uses the same editor in a compact frame. */
+export function NotesWorkspace({ onUseInChat }: { onUseInChat?: () => void }) {
+  const [dirty, setDirty] = useState(false);
+  return <NoteEditor closeRequest={false} onClose={() => undefined} onCloseRequestHandled={() => undefined} onDirtyChange={setDirty} seed={null} onSeedConsumed={() => undefined} noteToOpen={null} onNoteOpenConsumed={() => undefined} fullPage onUseInChat={onUseInChat} />;
 }
 
 export function WorkspacePanel({ quizSessionId, quizConceptId, layout, onLayoutChange, onCollapse, onExpand, noteSeed, noteToOpen, sourceToOpen, onNoteSeedConsumed, onNoteOpenConsumed }: {

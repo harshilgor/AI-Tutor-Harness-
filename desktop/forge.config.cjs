@@ -3,6 +3,7 @@ const owner = process.env.GITHUB_OWNER;
 const repository = process.env.GITHUB_REPOSITORY;
 const stagedResources = path.join(__dirname, '.vite', 'resources');
 const signedRelease = process.env.FORMA_REQUIRE_SIGNING === 'true';
+const packageOutput = process.env.FORMA_FORGE_PACKAGE_OUT;
 
 const windowsSigning = signedRelease ? {
   certificateFile: process.env.WINDOWS_CERTIFICATE_FILE,
@@ -22,6 +23,7 @@ const macSigning = signedRelease ? {
 
 module.exports = {
   packagerConfig: {
+    ...(packageOutput ? { out: packageOutput } : {}),
     asar: true,
     name: 'Forma',
     executableName: 'forma',

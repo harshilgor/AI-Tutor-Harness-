@@ -1,17 +1,33 @@
 "use client";
 
-import { ChangeEvent, useRef, useState } from 'react';
-import { Download, ShieldCheck, Trash2, Upload } from 'lucide-react';
+import { ChangeEvent, useEffect, useRef, useState } from 'react';
+import { Download, RefreshCw, ShieldCheck, Trash2, Upload } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { learningApi } from '@/lib/api';
 import styles from './local-data-settings.module.css';
 import { ProviderSettings } from './provider-settings';
 import { ReviewNotificationSettings } from './review-notification-settings';
 
+type UpdateStatus = { state: 'idle' | 'checking' | 'downloading' | 'ready' | 'up-to-date' | 'error' | 'unavailable'; currentVersion: string; availableVersion?: string; detail?: string };
+type DesktopUpdates = { status: () => Promise<UpdateStatus>; check: () => Promise<UpdateStatus>; install: () => Promise<boolean>; onStatus: (callback: (status: UpdateStatus) => void) => () => void };
+
+function desktopUpdates(): DesktopUpdates | null {
+  if (typeof window === 'undefined') return null;
+  return (window as Window & { formaDesktop?: { updates?: DesktopUpdates } }).formaDesktop?.updates || null;
+}
+
 export function LocalDataSettings({ onDone }: { onDone: () => void }) {
   const [busy, setBusy] = useState<'export' | 'backup' | 'restore' | 'delete' | null>(null);
   const [message, setMessage] = useState('');
   const restoreInput = useRef<HTMLInputElement>(null);
+  const [updates] = useState<DesktopUpdates | null>(() => desktopUpdates());
+  const [update, setUpdate] = useState<UpdateStatus | null>(null);
+
+  useEffect(() => {
+    if (!updates) return;
+    void updates.status().then(setUpdate);
+    return updates.onStatus(setUpdate);
+  }, [updates]);
 
   function download(base64: string, filename: string, type: string) {
     const raw = atob(base64); const bytes = Uint8Array.from(raw, char => char.charCodeAt(0));
@@ -58,9 +74,16 @@ export function LocalDataSettings({ onDone }: { onDone: () => void }) {
     finally { setBusy(null); }
   }
 
+  async function checkForUpdate() { if (updates) setUpdate(await updates.check()); }
+  async function installUpdate() { if (updates) await updates.install(); }
+
   return <div className={styles.body}>
     <ProviderSettings />
     <ReviewNotificationSettings />
+    {updates && update ? <section className={styles.update} aria-label="Application updates">
+      <div><strong>Forma {update.currentVersion}</strong><p>{update.detail || 'Keep Forma current with verified GitHub releases.'}</p></div>
+      {update.state === 'ready' ? <Button onClick={installUpdate}>Restart and install {update.availableVersion}</Button> : <Button variant="outline" disabled={update.state === 'checking' || update.state === 'downloading'} onClick={checkForUpdate}><RefreshCw size={15} />{update.state === 'checking' ? 'Checking…' : update.state === 'downloading' ? 'Downloading…' : 'Check for updates'}</Button>}
+    </section> : null}
     <div className={styles.callout}><ShieldCheck size={18} /><span>Forma keeps your learner data on this device. Provider keys use the desktop operating system’s encrypted credential store.</span></div>
     <div className={styles.actions}>
       <Button variant="outline" disabled={busy !== null} onClick={exportData}><Download size={15} />{busy === 'export' ? 'Preparing export…' : 'Export local data'}</Button>

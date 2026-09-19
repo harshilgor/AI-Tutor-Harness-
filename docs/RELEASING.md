@@ -1,6 +1,6 @@
-# Releasing Forma v0.1.0-beta
+# Releasing Forma
 
-The `v0.1.0-beta` tag is the only tag that can publish the signed beta. The workflow refuses to package a release if a required signing or notarization secret is missing. Do not create the tag until every item in this guide has been completed.
+Every release tag must exactly match `desktop/package.json`, for example `v0.1.1-beta`. The workflow refuses to package a public release if a required signing or notarization secret is missing. Do not create a tag until every item in this guide has been completed.
 
 ## Required GitHub Actions secrets
 
@@ -21,14 +21,14 @@ The workflow decodes certificates only into the ephemeral GitHub Actions runner.
 ## Release procedure
 
 1. Complete the upgrade checks below on copies of two supported prior versions before changing the tag.
-2. Verify the checkout is clean and `desktop/package.json` has version `0.1.0-beta`.
+2. Verify the checkout is clean and `desktop/package.json` has the intended version.
 3. Confirm every repository secret above is present and current. Test signing in a private release candidate repository if the certificate has changed.
-4. Push the exact annotated tag `v0.1.0-beta`. The release workflow validates that the tag and package version match.
+4. Create `docs/releases/v<version>.md`, then push the exact annotated tag `v<version>`. The release workflow validates that the tag and package version match.
 5. Review all three package jobs: Windows x64, macOS Intel, and macOS Apple Silicon. Windows validates the installer Authenticode signature; macOS validates the application signature and stapled notarization ticket.
 6. Review the generated `SHA256SUMS` file and the release assets. Only then make the GitHub prerelease visible to testers.
 7. Install from the published asset on clean Windows, Intel macOS, and Apple Silicon macOS devices. Confirm first-run provider setup, a Learn session, a Quiz, restart recovery, and local data persistence.
 
-The release workflow creates a GitHub prerelease with the Windows installer, macOS DMG/ZIP assets, and `SHA256SUMS`. It does not create automatic-update metadata or publish a stable release channel.
+The release workflow creates a GitHub prerelease with the Windows installer, macOS DMG/ZIP assets, and `SHA256SUMS`. The Windows release must include the Squirrel `RELEASES` file and `*-full.nupkg`; Forma uses those verified GitHub release assets for its in-app updater.
 
 ## Upgrade validation plan
 
@@ -38,14 +38,14 @@ For each source build:
 
 1. Install the source build and create learner evidence, a review schedule, a paused Learn workflow, one Quiz attempt, and an imported material.
 2. Close Forma completely. Make a copy of the platform's Forma application-data directory as a rollback backup.
-3. Install `v0.1.0-beta` over the source build without deleting application data.
+3. Install the candidate release over the source build without deleting application data.
 4. Open Forma and confirm migrations complete, the prior workflow can resume, learner evidence and review schedules remain present, imported material is available, and provider setup is unchanged.
 5. Export local data, then compare the export with the pre-upgrade state. Keep the backup until beta validation is accepted.
 6. Exercise the rollback procedure below on at least one test machine.
 
 ## Rollback
 
-The beta has no automatic updater. Stop Forma, restore the copied application-data directory, then reinstall the previously tested installer. Do not delete learner data during an uninstall: local data is intentionally preserved. If a migration cannot be reversed safely, restore the backup instead of opening the older build against the newer database.
+On Windows, Forma checks GitHub Releases after launch and from **Workspace Settings → Check for updates**. It downloads a newer signed Squirrel release and waits for the learner to select **Restart and install**. If automatic update fails, stop Forma, restore the copied application-data directory if needed, then install the previously tested installer. Do not delete learner data during an uninstall: local data is intentionally preserved. If a migration cannot be reversed safely, restore the backup instead of opening the older build against the newer database.
 
 ## Package 8 release gates
 

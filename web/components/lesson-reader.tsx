@@ -4,7 +4,6 @@ import { useEffect, useRef, useState, useSyncExternalStore } from 'react';
 import { RichContent } from './rich-content';
 import styles from './reading.module.css';
 
-export type ReadingMode = 'explain' | 'simpler' | 'example' | 'symbols' | 'why';
 export type ReadingBlock = { id: string; heading?: string | null; body: string };
 const defaults = '{"size":"standard","spacing":"comfortable"}';
 let memory = defaults;
@@ -12,7 +11,7 @@ function subscribe(callback: () => void) { window.addEventListener('storage', ca
 function snapshot() { try { return window.localStorage.getItem('forma-reading') || memory; } catch { return memory; } }
 function savePreferences(value: { size: string; spacing: string }) { memory = JSON.stringify(value); try { window.localStorage.setItem('forma-reading', memory); } catch { /* Still apply preferences for this visit. */ } window.dispatchEvent(new Event('forma-reading')); }
 
-export function LessonReader({ id, blocks, onSelect, onHelp }: { id: string; blocks: ReadingBlock[]; onSelect?: (block: ReadingBlock, raw: string, equation?: boolean) => void; onHelp?: (block: ReadingBlock, mode: ReadingMode) => void }) {
+export function LessonReader({ id, blocks, onSelect }: { id: string; blocks: ReadingBlock[]; onSelect?: (block: ReadingBlock, raw: string, equation?: boolean) => void }) {
   const stored = useSyncExternalStore(subscribe, snapshot, () => defaults);
   const prefs = { size: 'standard', spacing: 'comfortable' };
   try { const parsed = JSON.parse(stored); if (['standard', 'large', 'larger'].includes(parsed.size)) prefs.size = parsed.size; if (['compact', 'comfortable', 'spacious'].includes(parsed.spacing)) prefs.spacing = parsed.spacing; } catch { /* Ignore malformed stored settings. */ }
@@ -29,8 +28,6 @@ export function LessonReader({ id, blocks, onSelect, onHelp }: { id: string; blo
     <div className={styles.toolbar} aria-label="Reading preferences"><label>Text<select aria-label="Reading text size" value={prefs.size} onChange={event => savePreferences({ ...prefs, size: event.target.value })}><option value="standard">Standard</option><option value="large">Large</option><option value="larger">Larger</option></select></label><label>Spacing<select aria-label="Reading spacing" value={prefs.spacing} onChange={event => savePreferences({ ...prefs, spacing: event.target.value })}><option value="compact">Compact</option><option value="comfortable">Comfortable</option><option value="spacious">Spacious</option></select></label>
       {blocks.length >= 4 && <label className={styles.outline}>In this lesson<select aria-label="Lesson outline — reading position" value={active} onChange={event => { setActive(event.target.value); document.getElementById(event.target.value)?.scrollIntoView({ block: 'start', behavior: 'instant' }); }}><option value="">Jump to a section</option>{blocks.map((block, index) => <option key={block.id} value={`${id}-${block.id}`}>{index + 1}. {block.heading || 'Continue'}</option>)}</select></label>}
     </div>
-    {blocks.map(block => <section key={block.id} id={`${id}-${block.id}`} tabIndex={-1} data-reading-block className={styles.block} style={{ fontSize: size }}><h2>{block.heading || 'Explore this idea'}</h2><RichContent body={block.body} onExplore={onSelect ? (raw, equation) => onSelect(block, raw, equation) : undefined} />
-      {onHelp && <details className={styles.detail}><summary>A closer look</summary><div className={styles.blockTools}>{([['explain', 'Explain'], ['simpler', 'Simpler'], ['example', 'Show with numbers'], ['symbols', 'Explain the symbols'], ['why', 'Show why']] as const).map(([mode, label]) => <button key={mode} type="button" onClick={() => onHelp(block, mode)}>{label}</button>)}</div></details>}
-    </section>)}
+    {blocks.map(block => <section key={block.id} id={`${id}-${block.id}`} tabIndex={-1} data-reading-block className={styles.block} style={{ fontSize: size }}><h2>{block.heading || 'Explore this idea'}</h2><RichContent body={block.body} onExplore={onSelect ? (raw, equation) => onSelect(block, raw, equation) : undefined} /></section>)}
   </div>;
 }

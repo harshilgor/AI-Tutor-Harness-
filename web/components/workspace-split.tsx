@@ -16,7 +16,7 @@ function validLayout(value: unknown): value is WorkspacePanelLayout {
     && (candidate.activeTab === 'notes' || candidate.activeTab === 'quiz' || candidate.activeTab === 'sources');
 }
 
-export function WorkspaceSplit({ children, quizSessionId, quizConceptId }: { children: ReactNode; quizSessionId?: string | null; quizConceptId?: string }) {
+export function WorkspaceSplit({ children, quizSessionId, quizConceptId, hidePanel = false }: { children: ReactNode; quizSessionId?: string | null; quizConceptId?: string; hidePanel?: boolean }) {
   const [layout, setLayout] = useState<WorkspacePanelLayout>(DEFAULT_LAYOUT);
   const [ready, setReady] = useState(false);
   const [compact, setCompact] = useState(false);
@@ -27,7 +27,7 @@ export function WorkspaceSplit({ children, quizSessionId, quizConceptId }: { chi
   const resizing = useRef(false);
 
   useEffect(() => {
-    const media = window.matchMedia('(max-width: 1050px)');
+    const media = window.matchMedia('(max-width: 1220px)');
     const update = () => setCompact(media.matches);
     update();
     media.addEventListener('change', update);
@@ -89,6 +89,7 @@ export function WorkspaceSplit({ children, quizSessionId, quizConceptId }: { chi
     onCollapse={() => setLayout(current => ({ ...current, collapsed: true }))}
     onExpand={() => setLayout(current => ({ ...current, collapsed: false }))} />;
 
+  if (hidePanel) return <div className={styles.notesGroup}>{children}</div>;
   if (compact) return <div className={styles.compact}><div className={styles.compactMain}>{children}</div>{panel}</div>;
 
   return <div ref={groupRef} className={styles.group}>

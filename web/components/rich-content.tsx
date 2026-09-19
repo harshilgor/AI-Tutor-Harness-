@@ -22,7 +22,7 @@ function CodeBlock({ children, onExplore }: { children?: ReactNode; onExplore?: 
   const raw = String(props.children || '').replace(/\n$/, '');
   if (language === 'details') {
     const [title, ...body] = raw.split('\n');
-    return <details className={styles.detail}><summary>{title || 'A closer look'}</summary><RichContent body={body.join('\n')} onExplore={onExplore} /></details>;
+    return <details className={styles.detail}><summary>{title || 'Details'}</summary><RichContent body={body.join('\n')} onExplore={onExplore} /></details>;
   }
   return <div className={styles.code}><div className={styles.codeTop}><span>{language}</span><button type="button" onClick={async () => { try { await navigator.clipboard.writeText(raw); setCopied(true); setError(false); } catch { setError(true); } }}>{copied ? 'Copied' : 'Copy'}</button></div><pre>{children}</pre>{error && <span role="status">Copy unavailable. Select the text to copy it.</span>}</div>;
 }

@@ -15,6 +15,16 @@ contextBridge.exposeInMainWorld('formaDesktop', Object.freeze({
     get: () => ipcRenderer.invoke('preferences:get'),
     set: values => ipcRenderer.invoke('preferences:set', values)
   }),
+  updates: Object.freeze({
+    status: () => ipcRenderer.invoke('updates:status'),
+    check: () => ipcRenderer.invoke('updates:check'),
+    install: () => ipcRenderer.invoke('updates:install'),
+    onStatus: callback => {
+      const listener = (_event, status) => callback(status);
+      ipcRenderer.on('forma:update-status', listener);
+      return () => ipcRenderer.removeListener('forma:update-status', listener);
+    }
+  }),
   onOpenSettings: callback => {
     const listener = () => callback();
     ipcRenderer.on('forma:open-settings', listener);

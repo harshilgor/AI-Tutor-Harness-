@@ -1,4 +1,4 @@
-const { app, BrowserWindow, dialog, ipcMain, Menu, Notification, safeStorage, shell } = require('electron');
+const { app, autoUpdater, BrowserWindow, dialog, ipcMain, Menu, Notification, safeStorage, shell } = require('electron');
 const { spawn } = require('node:child_process');
 const { existsSync } = require('node:fs');
 const { readFileSync, writeFileSync, mkdirSync } = require('node:fs');
@@ -26,6 +26,79 @@ let shuttingDown = false;
 let restartAttempts = 0;
 let restartTimer;
 let reviewTimer;
+const updateRepository = 'harshilgor/AI-Tutor-Harness-';
+let updateStatus = { state: 'unavailable', currentVersion: app.getVersion() };
+
+function publishUpdateStatus(next) {
+  updateStatus = { ...updateStatus, ...next, currentVersion: app.getVersion() };
+  window?.webContents.send('forma:update-status', updateStatus);
+  return updateStatus;
+}
+
+function canCheckForUpdates() {
+  return app.isPackaged && !isDev && process.platform === 'win32';
+}
+
+function comparableVersion(value) {
+  const match = /^v?(\d+)\.(\d+)\.(\d+)(?:-([0-9A-Za-z.-]+))?$/.exec(value || '');
+  if (!match) return null;
+  return [Number(match[1]), Number(match[2]), Number(match[3]), match[4] || ''];
+}
+
+function isNewerVersion(candidate, current) {
+  const next = comparableVersion(candidate); const installed = comparableVersion(current);
+  if (!next || !installed) return false;
+  for (let index = 0; index < 3; index += 1) if (next[index] !== installed[index]) return next[index] > installed[index];
+  // A release build supersedes a prerelease of the same numeric version.
+  return Boolean(installed[3]) && !next[3];
+}
+
+async function latestReleaseFeed() {
+  const response = await fetch(`https://api.github.com/repos/${updateRepository}/releases?per_page=30`, {
+    headers: { Accept: 'application/vnd.github+json', 'User-Agent': `Forma/${app.getVersion()}` }
+  });
+  if (!response.ok) throw new Error(`GitHub could not check for updates (${response.status}).`);
+  const releases = await response.json();
+  if (!Array.isArray(releases)) throw new Error('GitHub returned an invalid release list.');
+  const current = app.getVersion();
+  const compatible = releases.filter(release => !release.draft && typeof release.tag_name === 'string' && isNewerVersion(release.tag_name, current) && Array.isArray(release.assets) && release.assets.some(asset => asset.name === 'RELEASES') && release.assets.some(asset => /-full\.nupkg$/i.test(asset.name)));
+  compatible.sort((left, right) => isNewerVersion(left.tag_name, right.tag_name) ? -1 : 1);
+  const release = compatible[0];
+  if (!release) return null;
+  return { version: release.tag_name.replace(/^v/, ''), url: `https://github.com/${updateRepository}/releases/download/${encodeURIComponent(release.tag_name)}` };
+}
+
+async function checkForUpdates() {
+  if (!canCheckForUpdates()) return publishUpdateStatus({ state: 'unavailable', detail: 'Updates are available in installed Windows releases.' });
+  try {
+    publishUpdateStatus({ state: 'checking', detail: 'Checking for a new version…' });
+    const release = await latestReleaseFeed();
+    if (!release) return publishUpdateStatus({ state: 'up-to-date', detail: 'You have the latest Forma version.' });
+    autoUpdater.setFeedURL({ url: release.url });
+    publishUpdateStatus({ state: 'checking', availableVersion: release.version, detail: `Preparing Forma ${release.version}…` });
+    autoUpdater.checkForUpdates();
+    return updateStatus;
+  } catch (error) {
+    return publishUpdateStatus({ state: 'error', detail: error instanceof Error ? error.message : 'Forma could not check for updates.' });
+  }
+}
+
+function configureUpdates() {
+  ipcMain.handle('updates:status', () => updateStatus);
+  ipcMain.handle('updates:check', () => checkForUpdates());
+  ipcMain.handle('updates:install', () => {
+    if (updateStatus.state !== 'ready') throw new Error('No downloaded update is ready to install.');
+    autoUpdater.quitAndInstall();
+    return true;
+  });
+  if (!canCheckForUpdates()) return;
+  updateStatus = { state: 'idle', currentVersion: app.getVersion() };
+  autoUpdater.on('checking-for-update', () => publishUpdateStatus({ state: 'checking', detail: 'Checking for a new version…' }));
+  autoUpdater.on('update-available', event => publishUpdateStatus({ state: 'downloading', availableVersion: event.version, detail: `Downloading Forma ${event.version}…` }));
+  autoUpdater.on('update-not-available', () => publishUpdateStatus({ state: 'up-to-date', detail: 'You have the latest Forma version.' }));
+  autoUpdater.on('update-downloaded', event => publishUpdateStatus({ state: 'ready', availableVersion: event.version, detail: `Forma ${event.version} is ready to install.` }));
+  autoUpdater.on('error', error => publishUpdateStatus({ state: 'error', detail: error.message || 'Forma could not download the update.' }));
+}
 
 function runtimePaths() {
   const root = app.getPath('userData');
@@ -84,9 +157,22 @@ function configureCredentialBridge() {
     const values = readCredentials();
     values[key] = safeStorage.encryptString(value).toString('base64');
     writeCredentials(values);
+    if (key === 'OPENAI_API_KEY' || key === 'OPENROUTER_API_KEY') {
+      const provider = key === 'OPENAI_API_KEY' ? 'openai' : 'openrouter';
+      writePreferences({ ...readPreferences(), modelProvider: provider });
+    }
     return true;
   });
-  ipcMain.handle('credentials:delete', (_event, key) => { const values = readCredentials(); delete values[key]; writeCredentials(values); return true; });
+  ipcMain.handle('credentials:delete', (_event, key) => {
+    const values = readCredentials(); delete values[key]; writeCredentials(values);
+    const preferences = readPreferences();
+    const removedProvider = key === 'OPENAI_API_KEY' ? 'openai' : key === 'OPENROUTER_API_KEY' ? 'openrouter' : undefined;
+    if (removedProvider && preferences.modelProvider === removedProvider) {
+      const { modelProvider: _removed, ...remaining } = preferences;
+      writePreferences(remaining);
+    }
+    return true;
+  });
   ipcMain.handle('preferences:get', () => ({ reviewNotifications: readPreferences().reviewNotifications === true }));
   ipcMain.handle('preferences:set', (_event, values) => {
     if (!values || typeof values.reviewNotifications !== 'boolean') throw new Error('Invalid desktop preference.');
@@ -140,6 +226,7 @@ function configureApplicationMenu() {
     { role: 'appMenu' },
     { label: 'File', submenu: [
       { label: 'Local data settings', click: () => window?.webContents.send('forma:open-settings') },
+      { label: 'Check for updates', click: () => { void checkForUpdates(); window?.webContents.send('forma:open-settings'); } },
       { type: 'separator' },
       { role: 'quit' },
     ] },
@@ -194,6 +281,11 @@ async function startApi() {
     const value = readCredential(key);
     if (value) providerEnvironment[key] = value;
   }
+  const preferredProvider = readPreferences().modelProvider;
+  if (preferredProvider === 'openai' && providerEnvironment.OPENAI_API_KEY) providerEnvironment.AI_TUTOR_PROVIDER = 'openai';
+  else if (preferredProvider === 'openrouter' && providerEnvironment.OPENROUTER_API_KEY) providerEnvironment.AI_TUTOR_PROVIDER = 'openrouter';
+  else if (providerEnvironment.OPENAI_API_KEY) providerEnvironment.AI_TUTOR_PROVIDER = 'openai';
+  else if (providerEnvironment.OPENROUTER_API_KEY) providerEnvironment.AI_TUTOR_PROVIDER = 'openrouter';
   const args = isDev || !executable.endsWith('forma-api.exe') && !executable.endsWith('forma-api')
     ? ['-m', 'uvicorn', 'backend.app.main:app', '--host', '127.0.0.1', '--port', String(apiPort)]
     : ['--host', '127.0.0.1', '--port', String(apiPort)];
@@ -257,8 +349,9 @@ async function createWindow() {
 app.whenReady().then(() => {
   if (!hasSingleInstanceLock) return;
   configureCredentialBridge();
+  configureUpdates();
   configureApplicationMenu();
-  return createWindow().then(() => startReviewNotifications()).catch(error => {
+  return createWindow().then(() => { startReviewNotifications(); if (canCheckForUpdates()) setTimeout(() => void checkForUpdates(), 8000); }).catch(error => {
     dialog.showErrorBox('Forma could not start', error.message);
     app.quit();
   });
