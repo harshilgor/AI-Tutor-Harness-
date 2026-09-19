@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useRef, useState } from 'react';
+import { useCallback, useEffect, useLayoutEffect, useRef, useState } from 'react';
 import { ArrowUp, FileText, Paperclip, X, Upload } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import styles from './learn-chat.module.css';
@@ -17,6 +17,7 @@ export function ChatComposer({ value, onChange, attachments, onAttachmentsChange
   noteMentions?: ChatNoteMention[]; onAddNoteMention?: (note: WorkspaceNoteSummary) => void; onRemoveNoteMention?: (noteId: string) => void; onOpenNoteMention?: (noteId: string) => void;
 }) {
   const input = useRef<HTMLInputElement>(null);
+  const textarea = useRef<HTMLTextAreaElement>(null);
   const dragDepth = useRef(0);
   const [dragging, setDragging] = useState(false);
   const [error, setError] = useState('');
@@ -41,6 +42,17 @@ export function ChatComposer({ value, onChange, attachments, onAttachmentsChange
     setError(rejected.length ? `Couldn't attach ${rejected.join(', ')}. Use PDF, TXT, Markdown, PNG, JPG, WEBP, or GIF files up to 50 MB.` : '');
   }
   const hasLink = /https?:\/\/\S+/i.test(value);
+  const resizeTextarea = useCallback(() => {
+    const element = textarea.current;
+    if (!element) return;
+    const maxHeight = 196;
+    element.style.height = '0px';
+    const height = Math.min(Math.max(element.scrollHeight, 72), maxHeight);
+    element.style.height = `${height}px`;
+    element.style.overflowY = element.scrollHeight > maxHeight ? 'auto' : 'hidden';
+  }, []);
+  useLayoutEffect(() => { resizeTextarea(); }, [resizeTextarea, value]);
+
   return <form className={`${followup ? styles.followupComposer : styles.composer} ${styles.chatComposer} ${dragging ? styles.dragging : ''}`}
     onSubmit={event => { event.preventDefault(); onSubmit(); }}
     onDragEnter={event => { if (!busy && event.dataTransfer.types.includes('Files')) { event.preventDefault(); dragDepth.current++; setDragging(true); } }}
@@ -52,7 +64,7 @@ export function ChatComposer({ value, onChange, attachments, onAttachmentsChange
     <div className={styles.gearToggle} role="group" aria-label="Conversation mode">{(['ask', 'learn'] as const).map(option => <button key={option} type="button" disabled={busy} aria-pressed={mode === option} className={mode === option ? styles.gearActive : ''} onClick={() => onModeChange?.(option)}>{option === 'ask' ? 'Ask' : 'Learn'}</button>)}</div>
     {noteMentions.length > 0 ? <div className={styles.noteReceipt} aria-label="Learner note context">{noteMentions.map(note => <span key={note.noteId}><button type="button" onClick={() => onOpenNoteMention?.(note.noteId)} title="Open note in workspace">@{note.title}</button><details><summary>{note.endOffset - note.startOffset} characters</summary><pre>{note.excerpt}</pre></details><button type="button" aria-label={`Remove ${note.title} from context`} onClick={() => onRemoveNoteMention?.(note.noteId)}><X size={12} /></button></span>)}<p>Learner-provided context only. It is not a verified source.</p></div> : null}
     <label htmlFor="chat-message" className="sr-only">Message your tutor</label>
-    <textarea id="chat-message" disabled={busy} value={value} maxLength={4000} placeholder={followup ? 'Ask a follow-up…' : 'Ask anything, or drop in a book…'} rows={followup ? 2 : 3} onChange={event => onChange(event.target.value)}
+    <textarea ref={textarea} id="chat-message" disabled={busy} value={value} maxLength={4000} placeholder={followup ? 'Ask a follow-up…' : 'Ask anything, or drop in a book…'} rows={followup ? 2 : 3} onChange={event => onChange(event.target.value)}
       onPaste={event => { if (event.clipboardData.files.length) { event.preventDefault(); add(Array.from(event.clipboardData.files)); } }}
       onKeyDown={event => { if (event.key === 'Enter' && !event.shiftKey && !event.nativeEvent.isComposing) { event.preventDefault(); onSubmit(); } }} />
     {noteQuery !== null && noteMatches.length > 0 ? <div className={styles.notePicker} role="listbox" aria-label="Notes to mention">{noteMatches.map(note => <button type="button" role="option" aria-selected="false" key={note.id} onClick={() => { onChange(value.replace(/@[^\s@]*$/, `@${note.title} `)); onAddNoteMention?.(note); setNoteMatches([]); }}><strong>{note.title}</strong><small>Revision {note.revision}</small></button>)}</div> : null}
