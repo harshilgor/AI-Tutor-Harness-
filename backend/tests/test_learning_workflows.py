@@ -11,6 +11,7 @@ from backend.app.graph_generator import GraphGenerator
 from backend.app.models import TopicScope, utc_now
 from backend.app.session_models import LearningSession
 from backend.app.learning_routes import build_learning_router
+from backend.app.generation_routes import build_generation_router
 from backend.app.material_service import MaterialService
 from backend.app.material_models import UploadRequest
 from backend.app.learner_graph import LearnerGraphRepository
@@ -46,6 +47,10 @@ class Provider:
             return {"certain": self.certain, "criteria": [{"id": "population", "score": 1}], "feedback": "Your explanation identifies the reference population."}
         return {"blocks": [{"kind": "explanation", "heading": "Conditioning", "body": "Conditioning changes the population we consider. Start with the observations consistent with the given event."}]}
 
+    async def stream_text(self, prompt, max_tokens=4000):
+        yield "Conditioning changes the population "
+        yield "we consider when an event is given."
+
 
 @pytest.fixture
 def env(tmp_path, monkeypatch):
@@ -68,6 +73,7 @@ def env(tmp_path, monkeypatch):
     provider = Provider()
     app = FastAPI()
     app.include_router(build_learning_router(lambda: store, lambda: provider))
+    app.include_router(build_generation_router(lambda: store, lambda: provider))
     with TestClient(app) as client:
         yield client, store, provider, session
     store.close()
@@ -183,3 +189,23 @@ def test_queued_job_recovery_and_conflicting_key(env):
 
 def test_number_changes_are_not_novel():
     assert fingerprint("There are 20 samples and 5 cases.") == fingerprint("There are 90 samples and 12 cases.")
+
+
+def test_streamed_ask_persists_a_canonical_turn_and_replays(env):
+    client, _, _, session = env
+    payload = {"mode": "ask", "message": "What does conditioning change?", "gear": "Guided", "expectedRevision": 1}
+    created = client.post(f"/v1/sessions/{session.id}/generations", json=payload, headers={"Idempotency-Key": "stream-one"})
+    assert created.status_code == 202, created.text
+    generation = created.json()
+    duplicate = client.post(f"/v1/sessions/{session.id}/generations", json=payload, headers={"Idempotency-Key": "stream-one"})
+    assert duplicate.json()["id"] == generation["id"]
+    response = client.get(f"/v1/generations/{generation['id']}/events")
+    assert response.status_code == 200
+    assert response.headers["content-type"].startswith("text/event-stream")
+    assert response.headers["cache-control"] == "no-cache, no-transform"
+    assert response.headers["x-accel-buffering"] == "no"
+    assert "event: text.delta" in response.text and "event: generation.completed" in response.text
+    saved = client.get(f"/v1/sessions/{session.id}/journey").json()
+    assert saved["turns"][-1]["lesson"]["blocks"][0]["body"].startswith("Conditioning changes")
+    descriptor = client.get(f"/v1/generations/{generation['id']}").json()
+    assert descriptor["metrics"]["applicationTtftSeconds"] >= 0

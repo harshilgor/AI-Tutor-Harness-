@@ -8,7 +8,9 @@ from __future__ import annotations
 
 import json
 import os
+import base64
 from dataclasses import dataclass
+from collections.abc import AsyncIterator
 from typing import Any, Protocol
 
 import httpx
@@ -31,6 +33,13 @@ class GeneratedBlock:
     body: str
 
 
+@dataclass(frozen=True)
+class ImageInput:
+    media_type: str
+    data: bytes
+    title: str
+
+
 class LessonProvider(Protocol):
     provider_name: str
 
@@ -44,6 +53,8 @@ class LessonProvider(Protocol):
         intent: TeachingIntent,
         note_context: list[dict[str, Any]] | None = None,
     ) -> list[GeneratedBlock]: ...
+
+    async def stream_text(self, prompt: str, max_tokens: int = 4000, *, images: list[ImageInput] | None = None) -> AsyncIterator[str]: ...
 
 
 class OpenRouterLessonProvider:
@@ -214,6 +225,61 @@ Use 1-3 blocks. The only permitted kind values are explanation and example. Do n
         if not isinstance(parsed, dict):
             raise ModelProviderError("The model must return a JSON object.")
         return parsed
+
+    async def stream_text(self, prompt: str, max_tokens: int = 4000, *, images: list[ImageInput] | None = None) -> AsyncIterator[str]:
+        """Yield provider text only; OpenAI/OpenRouter SSE stays at this boundary."""
+        headers = {"Authorization": f"Bearer {self.api_key}", "Content-Type": "application/json"}
+        if self.site_url:
+            headers["HTTP-Referer"] = self.site_url
+        if self.app_name:
+            headers["X-Title"] = self.app_name
+        payload = self.streaming_payload(prompt, max_tokens, images)
+        images = images or []
+        try:
+            async with httpx.AsyncClient(timeout=httpx.Timeout(180.0, connect=20.0)) as client:
+                async with client.stream("POST", self.base_url, headers=headers, json=payload) as response:
+                    response.raise_for_status()
+                    async for line in response.aiter_lines():
+                        if not line.startswith("data:"):
+                            continue
+                        data = line[5:].strip()
+                        if not data or data == "[DONE]":
+                            continue
+                        try:
+                            event = json.loads(data)
+                        except json.JSONDecodeError as exc:
+                            raise ModelProviderError("The model sent an unreadable stream event.") from exc
+                        if event.get("type") in {"error", "response.failed", "response.incomplete"}:
+                            raise ModelProviderError("The model stream ended before the lesson was complete.")
+                        delta = ""
+                        if event.get("type") == "response.output_text.delta":
+                            delta = event.get("delta") or ""
+                        elif isinstance(event.get("choices"), list) and event["choices"]:
+                            delta = (event["choices"][0].get("delta") or {}).get("content") or ""
+                        if isinstance(delta, str) and delta:
+                            yield delta
+        except httpx.TimeoutException as exc:
+            raise ModelProviderError("PROVIDER_TIMEOUT") from exc
+        except httpx.HTTPStatusError as exc:
+            if images and exc.response.status_code in {400, 404, 415, 422}:
+                raise ModelProviderError("VISION_UNSUPPORTED") from exc
+            raise ModelProviderError("PROVIDER_ERROR") from exc
+        except httpx.HTTPError as exc:
+            raise ModelProviderError("PROVIDER_ERROR") from exc
+
+    def streaming_payload(self, prompt: str, max_tokens: int, images: list[ImageInput] | None = None) -> dict:
+        """Build a provider-native streaming request; kept separate for contract tests."""
+        images = images or []
+        encoded_images = [f"data:{image.media_type};base64,{base64.b64encode(image.data).decode('ascii')}" for image in images]
+        if getattr(self, "is_openai", False):
+            provider_input: object = prompt if not images else [{"role": "user", "content": [{"type": "input_text", "text": prompt}, *[{"type": "input_image", "image_url": value} for value in encoded_images]]}]
+            payload = {"model": self.model, "input": provider_input, "max_output_tokens": max_tokens, "stream": True,
+                       "reasoning": {"effort": "low"}}
+        else:
+            content: object = prompt if not images else [{"type": "text", "text": prompt}, *[{"type": "image_url", "image_url": {"url": value}} for value in encoded_images]]
+            payload = {"model": self.model, "messages": [{"role": "user", "content": content}], "temperature": 0.3,
+                       "max_tokens": max_tokens, "stream": True}
+        return payload
 
     @staticmethod
     def _parse_blocks(parsed: dict) -> list[GeneratedBlock]:

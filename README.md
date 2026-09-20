@@ -1,40 +1,146 @@
-# AI Tutor Harness
+# AI Tutor Harness · Forma
 
-## Forma desktop beta
+Forma is a local-first AI learning environment for exploring a topic, learning through a guided conversation, working from your own material, and checking understanding without losing context.
 
-Forma is a local-first AI learning environment. The desktop application starts the bundled tutor service on your device, keeps learner state locally, and provides a shared Ask/Learn chat with a connected Quiz workspace.
+It is built around a simple idea: an AI tutor should support deliberate learning rather than act as an unstructured chat window. Forma keeps the learner's workspace, notes, quiz activity, and review data on the device while providing a path from question to explanation to practice.
 
-Download installers and read version-specific changes from the repository's **GitHub Releases** page. See [installation instructions](docs/INSTALL.md), [release notes](CHANGELOG.md), and the [desktop release plan](outputs/Desktop_Application_and_GitHub_Release_Plan.md).
+> **Project status:** local desktop beta. The application is functional for local learning workflows; hosted accounts, multi-device sync, retrieval-backed verification, calibrated mastery, and automatic updates are not included.
 
-### What is included
+## What Forma does
 
-- Guided Learn conversations with Quick, Guided, and Deep teaching gears.
-- Quiz generation and evaluation that records assessment evidence through the persistent learner-state service.
-- Local SQLite learner data, export/delete controls, review scheduling, and optional desktop review reminders.
-- A bundled Electron application with a loopback-only FastAPI sidecar, encrypted local provider-key storage, first-run setup, and automatic sidecar recovery.
+- **Ask and Learn conversations** with Quick, Guided, and Deep teaching depth.
+- **Streaming lessons** with reconnect-safe generation, cancellation, semantic sections, and selection-based follow-up explanations.
+- **Source-aware learning** from text, PDFs, public web pages, and supported image formats.
+- **Local notes** with automatic saving, Markdown editing, backlinks, and the ability to use selected note text as chat context.
+- **Practice and assessment** with generated quizzes, hints, answer feedback, persistent attempts, and review scheduling.
+- **Knowledge maps** for browsing connected concepts and moving from a map into a focused lesson.
+- **Local-first desktop delivery** through Electron, a loopback-only FastAPI service, and encrypted operating-system credential storage for provider keys.
 
-### Current release boundary
+## How it works
 
-The current build is a local desktop beta. It supports deterministic teaching without a model key; configure OpenRouter or OpenAI in **Your workspace** for model-backed lessons and quizzes. The `v0.1.0-beta` release workflow publishes only after Windows signing and macOS signing/notarization checks pass; its operator instructions are in [the release runbook](docs/RELEASING.md). Hosted accounts, multi-device sync, retrieval-backed source verification, calibrated mastery, and automatic updates are not part of this release.
+```text
+Your question or source material
+            ↓
+  Forma web workspace (Ask / Learn / Notes / Quiz)
+            ↓
+ Local FastAPI learning service + SQLite learner data
+            ↓
+ Deterministic baseline, or an optional configured model provider
+```
 
-Start the local web interface and tutor API together with `./start-local.ps1` from PowerShell. Opening the web interface alone does not start the Python API. Startup logs are saved in `work/local-runtime`.
+The default `deterministic_baseline` requires no API key. It produces qualified instructional scaffolds and labels them as limited/unverified. Configure OpenRouter or OpenAI in **Your workspace** when you want model-backed lessons and quizzes.
 
-An AI learning environment that combines a curriculum graph, persistent learner evidence, adaptive teaching, verification, and assessment.
+## Current feature boundary
 
-Start with the [Product and Technical Brief](AI_Tutor_Harness_Product_and_Technical_Brief.md).
+Forma is intentionally conservative about learning claims:
 
-Before implementation, review [Phase One: Scope and Build Readiness](Phase_One_Scope_and_Build_Readiness.md). It narrows the current scope to the knowledge graph, teaching harness and controls, and contextual exploration windows, and records decisions still needed before coding.
+- Generated lessons do not imply verified facts, source coverage, or mastery.
+- Learner evidence is persisted separately from exploration and lesson viewing.
+- Public-link imports reject private/loopback destinations, credentials, unsafe redirects, oversized content, and non-text responses.
+- Provider keys stay in the desktop operating system's credential store and are never exported with local backups.
 
-The detailed build reference is [Phase One — Features and Technical Implementation Specification](Phase_One_Features_and_Technical_Implementation_Spec.md). It includes arbitrary-topic graph generation and trust, teaching policies, controls, nested exploration, data/API contracts, reliability, quality gates, and implementation work packages.
+Read the [product and technical brief](AI_Tutor_Harness_Product_and_Technical_Brief.md) for product direction, [implementation status](web/IMPLEMENTATION_STATUS.md) for the UI boundary, and [future considerations](Future_Features_and_Technical_Considerations.md) for intentionally deferred work.
 
-Deferred capabilities and architectural extension points are in [Future Features and Technical Considerations](Future_Features_and_Technical_Considerations.md).
+## Tech stack
 
-The brief consolidates the design conversation into product direction, Learn/Practice/Notebook navigation, the learning kernel and modular architecture, proposed Python/TypeScript stack, assessment generation, data contracts, implementation phases, risks, and open decisions.
+| Area | Technology |
+| --- | --- |
+| Web workspace | React 19, TypeScript, Vinext/Vite, Tailwind CSS, shadcn-compatible components |
+| Interaction design | Motion, Lucide, responsive CSS |
+| Local API | FastAPI, SQLAlchemy, Alembic |
+| Local data | SQLite by default; PostgreSQL supported for deployed environments |
+| Desktop app | Electron with a loopback-only local sidecar |
+| Tests | Pytest, ESLint, production web build |
 
-The first website slice is in [`web/`](web/). See [`web/README.md`](web/README.md) for the working interactions and [`web/IMPLEMENTATION_STATUS.md`](web/IMPLEMENTATION_STATUS.md) for the current boundary between the interactive preview and the backend work still to connect.
+## Getting started
 
-The first backend slice is in [`backend/`](backend/). It provides the local FastAPI graph flow, SQLite persistence, typed graph records, and the deterministic provider boundary described in [`backend/README.md`](backend/README.md).
+### Prerequisites
 
-The desktop application is in [`desktop/`](desktop/). It bundles the built web UI and FastAPI sidecar behind a hardened Electron shell. Development setup is in [`desktop/README.md`](desktop/README.md); end-user installation and release behavior are documented in [`docs/INSTALL.md`](docs/INSTALL.md). GitHub Actions packages Windows and macOS artifacts for pull requests and tagged releases.
+- Node.js 22.13 or newer
+- Python compatible with the backend requirements
+- npm
 
-**Status:** Local desktop beta implementation. Learn/Quiz workflows, persistent learner evidence and review schedules, local data controls, packaged Windows runtime validation, and signed-beta release automation are complete. Interactive uninstall verification, release-device validation, hosted authentication, and public v1 publishing remain.
+### Run the local workspace
+
+Create the backend environment and install its dependencies:
+
+```powershell
+python -m venv backend\.venv
+backend\.venv\Scripts\python -m pip install -r backend\requirements.txt
+```
+
+Then start the web workspace and local API together from the repository root:
+
+```powershell
+.\start-local.ps1
+```
+
+Open [http://127.0.0.1:3000](http://127.0.0.1:3000). The local API is available at [http://127.0.0.1:8000/docs](http://127.0.0.1:8000/docs).
+
+### Run the desktop app in development
+
+Start the local services as above, then in another terminal:
+
+```powershell
+cd desktop
+npm install
+npm run dev
+```
+
+The desktop shell expects the web workspace at `127.0.0.1:3000` and the API at `127.0.0.1:8000`. See the [desktop development guide](desktop/README.md) for overrides, packaging, and local smoke testing.
+
+## Development
+
+### Web workspace
+
+```powershell
+cd web
+npm install
+npm run dev -- --hostname 127.0.0.1 --port 3000
+npm run lint
+npm run build
+```
+
+### Backend
+
+```powershell
+python -m pytest backend/tests -q
+python -m compileall -q backend/app backend/migrations
+```
+
+Live-provider tests are opt-in because they may use a configured, paid, or rate-limited model:
+
+```powershell
+$env:RUN_LIVE_PROVIDER_TESTS = "true"
+python -m pytest backend/tests/test_live_provider_streaming.py -m live_provider
+```
+
+## Project structure
+
+```text
+backend/     FastAPI service, persistence, migrations, and backend tests
+desktop/     Electron shell and packaging scripts
+docs/        Installation, release, deployment, and implementation documentation
+web/         React workspace, UI components, and client-side API contracts
+```
+
+## Recent updates
+
+- Added durable streaming-generation infrastructure and source ingestion for public URLs.
+- Added local workspace notes, note context in chat, and automatic note saving.
+- Improved first-run desktop settings responsiveness and added subtle reduced-motion-safe interactions across chat, quiz, dialogs, workspace panels, note drafts, and recommendations.
+- Expanded local backup, restore, provider configuration, and review-notification flows.
+
+## Releases and installation
+
+End-user installation instructions are in [docs/INSTALL.md](docs/INSTALL.md). Release changes are tracked in [CHANGELOG.md](CHANGELOG.md), and maintainers should follow the [release runbook](docs/RELEASING.md).
+
+## Contributing
+
+Contributions are welcome. Please keep changes focused, preserve the local-first and evidence-aware boundaries, add or update tests when behavior changes, and avoid committing credentials, local databases, build output, or `.env` files.
+
+Before opening a pull request, run the relevant checks for the area you changed and explain any intentional product-boundary decisions in the description.
+
+## License
+
+This repository does not currently declare a license. Do not assume reuse rights until a license is added.

@@ -20,7 +20,6 @@ export async function prepareAttachment(item: ChatAttachment, signal: AbortSigna
     signal.throwIfAborted();
     const result = await materialRequest<{ status: string }>(`/materials/${current.materialId}`, { signal });
     if (['ready', 'partially_ready'].includes(result.status)) return current;
-    if (result.status === 'needs_attention' && /\.(png|jpe?g|webp|gif)$/i.test(item.name)) throw new Error(`${item.name} was uploaded, but visual interpretation is not enabled yet. Attach a transcript or paste the text you want to study.`);
     if (['failed', 'needs_attention', 'deleted'].includes(result.status)) throw new Error(`${item.name} couldn't be read. Try a text-based PDF or paste the relevant passage.`);
     await new Promise(resolve => window.setTimeout(resolve, 1500));
   }

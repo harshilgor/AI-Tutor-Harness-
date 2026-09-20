@@ -4,7 +4,7 @@ import httpx
 import pytest
 
 import backend.app.model_provider as model_provider
-from backend.app.model_provider import ModelProviderError, OpenRouterLessonProvider, configured_lesson_provider
+from backend.app.model_provider import ImageInput, ModelProviderError, OpenRouterLessonProvider, configured_lesson_provider
 
 
 def test_openrouter_provider_parses_structured_lesson(monkeypatch):
@@ -88,3 +88,21 @@ def test_provider_reports_actionable_errors(monkeypatch, status, message):
     monkeypatch.setattr(httpx, "post", lambda *args, **kwargs: httpx.Response(status, request=httpx.Request("POST", "https://example.test")))
     with pytest.raises(ModelProviderError, match=message):
         OpenRouterLessonProvider("key", "model", None, None)._complete("prompt", 1000)
+
+
+def test_openai_streaming_payload_contains_real_image_input():
+    provider = OpenRouterLessonProvider.openai("key", "gpt-4.1-mini")
+    payload = provider.streaming_payload("Explain the diagram", 500, [ImageInput("image/png", b"png", "diagram")])
+    content = payload["input"][0]["content"]
+    assert content[0] == {"type": "input_text", "text": "Explain the diagram"}
+    assert content[1]["type"] == "input_image"
+    assert content[1]["image_url"].startswith("data:image/png;base64,")
+
+
+def test_openrouter_streaming_payload_contains_real_image_input():
+    provider = OpenRouterLessonProvider("key", "vision-model", None, None)
+    payload = provider.streaming_payload("Explain the photo", 500, [ImageInput("image/jpeg", b"jpeg", "photo")])
+    content = payload["messages"][0]["content"]
+    assert content[0]["type"] == "text"
+    assert content[1]["type"] == "image_url"
+    assert content[1]["image_url"]["url"].startswith("data:image/jpeg;base64,")

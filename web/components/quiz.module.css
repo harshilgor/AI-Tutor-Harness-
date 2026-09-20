@@ -7,6 +7,7 @@
 .card { padding: 1.5rem; border: 1px solid var(--border); border-radius: 16px; margin: 1.5rem 0; background: var(--card); }
 .actions,.setup,.progress { display: flex; flex-wrap: wrap; align-items: center; gap: .75rem; margin: 1rem 0; }
 .progress { justify-content: space-between; }
+.progressTrack{height:5px;min-width:100px;flex:1;overflow:hidden;border-radius:999px;background:#e4e9e1}.progressTrack span{display:block;height:100%;border-radius:inherit;background:#718568}
 .setup label { display: grid; gap: .5rem; min-width: 140px; }
 .setup select,.card textarea { padding: .8rem; border: 1px solid var(--border); border-radius: 8px; font: inherit; background: var(--background); color: var(--foreground); }
 .card textarea { width: 100%; min-height: 110px; }

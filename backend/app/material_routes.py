@@ -19,6 +19,10 @@ class MaterialQuestion(BaseModel):
     selected_span_ids: list[str] = Field(default_factory=list, max_length=6, validation_alias="selectedSpanIds")
 
 
+class UrlMaterialRequest(BaseModel):
+    url: str = Field(min_length=8, max_length=2048)
+
+
 def build_material_router(store_provider, provider_getter=lambda: None):
     router = APIRouter(prefix="/v1")
     def service(db=Depends(store_provider)):
@@ -61,6 +65,19 @@ def build_material_router(store_provider, provider_getter=lambda: None):
         result = svc.upload(owner, item["materialId"], item["versionId"], content)
         tasks.add_task(svc.process_one)
         return result
+
+    @router.post("/sessions/{sid}/url-materials", status_code=201)
+    def add_url(sid: str, request: UrlMaterialRequest, owner=Depends(material_owner), svc=Depends(service)):
+        from .url_ingestion import fetch_public_page
+        page = fetch_public_page(request.url)
+        content = page["text"].encode("utf-8")
+        item = svc.create(owner, UploadRequest(title=page["title"], media_type="text/plain", byte_count=len(content), role="reference"))
+        svc.upload(owner, item["materialId"], item["versionId"], content)
+        for _ in range(20):
+            svc.process_one()
+            if svc.details(owner, item["materialId"])["status"] in {"ready", "partially_ready", "failed", "needs_attention"}: break
+        svc.attach(owner, sid, item["versionId"])
+        return {**item, "url": page["url"], "title": page["title"]}
 
     @router.put("/materials/{mid}/versions/{vid}/content")
     async def upload(mid: str, vid: str, request: Request, tasks: BackgroundTasks, owner=Depends(material_owner), svc=Depends(service)):

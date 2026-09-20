@@ -1,7 +1,7 @@
 "use client";
 
 import { useCallback, useEffect, useRef, useState, type Dispatch, type SetStateAction } from 'react';
-import { BookOpen, ChevronLeft, FileText, Link2, PanelRightClose, Plus, Save, Search, Send, Unlink, X } from 'lucide-react';
+import { BookOpen, ChevronLeft, FileText, Link2, PanelRightClose, Plus, Search, Send, Unlink, X } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { LearningApiError, learningApi, request, type WorkspaceNote, type WorkspaceNoteLink, type WorkspaceNoteSummary } from '@/lib/api';
 import { QuizWorkspace } from './quiz-workspace';
@@ -178,6 +178,13 @@ function NoteEditor({ closeRequest, onClose, onCloseRequestHandled, onDirtyChang
   }
 
   useEffect(() => {
+    const hasContent = Boolean(draft && (draft.title.trim() !== 'Untitled note' || draft.body.trim()));
+    if (!dirty || saving || !hasContent) return;
+    const timer = window.setTimeout(() => { void save(); }, 650);
+    return () => window.clearTimeout(timer);
+  }, [draft?.body, draft?.title, dirty, saving]);
+
+  useEffect(() => {
     if (!draft?.id || !linkQuery.trim()) return;
     const timer = window.setTimeout(() => {
       void learningApi.searchWorkspaceNotes(linkQuery).then(result => {
@@ -258,9 +265,8 @@ function NoteEditor({ closeRequest, onClose, onCloseRequestHandled, onDirtyChang
       {!draft ? <div className={styles.emptyEditor}><BookOpen size={28} /><h2>Capture what matters</h2><p>Keep your own explanations, examples, and questions in local Markdown notes.</p><Button type="button" onClick={startBlank}><Plus size={16} />New note</Button></div> : <>
         <div className={styles.editorTop}>
           <input value={draft.title} onChange={event => setDraft(current => current ? { ...current, title: event.target.value } : current)} aria-label="Note title" placeholder="Note title" />
-          <Button type="button" size="sm" disabled={saving || !dirty} onClick={() => void save()}><Save size={15} />{saving ? 'Saving' : 'Save'}</Button>
         </div>
-        <div className={styles.status} role="status">{saving ? 'Saving…' : dirty ? 'Unsaved changes' : draft.id ? 'Saved locally' : 'New note — not saved yet'}</div>
+        <div className={styles.status} role="status">{saving ? 'Saving…' : dirty ? 'Saving changes…' : draft.id ? 'Saved locally' : 'Start typing to create this note'}</div>
         <textarea ref={bodyInput} value={draft.body} onChange={event => setDraft(current => current ? { ...current, body: event.target.value } : current)} placeholder="Write in Markdown…" aria-label="Note body" spellCheck />
         {draft.id ? <section className={styles.noteContextTools} aria-label="Use note in chat">
           <p>Select text in the note, then add only that excerpt to chat.</p>

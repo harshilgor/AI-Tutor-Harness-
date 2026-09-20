@@ -1,6 +1,7 @@
 "use client";
 
 import { useEffect, useState } from 'react';
+import { AnimatePresence, motion, useReducedMotion } from 'motion/react';
 import { Button } from '@/components/ui/button';
 import { request } from '@/lib/api';
 import { cancelWorkflow, getQuiz, workflow, waitForJob, type Quiz } from '@/lib/learning-workflows';
@@ -9,6 +10,7 @@ import { openWorkspaceSource } from '@/lib/workspace-events';
 import styles from './quiz.module.css';
 
 export function QuizWorkspace({ sessionId, conceptId, inline = false, onReturn, onCreateRepairNote }: { sessionId?: string | null; conceptId?: string; inline?: boolean; onReturn?: () => void; onCreateRepairNote?: (attemptId: string) => void }) {
+  const reduceMotion = useReducedMotion();
   const [quiz, setQuiz] = useState<Quiz | null>(null);
   const [saved, setSaved] = useState<{ id: string; title: string; status: string }[]>([]);
   const [count, setCount] = useState(inline ? 1 : 5);
@@ -62,12 +64,12 @@ export function QuizWorkspace({ sessionId, conceptId, inline = false, onReturn, 
       <Button disabled={busy} onClick={start}>Prepare quiz</Button>
       {!inline && saved.map(q => <button className={styles.saved} key={q.id} disabled={busy} onClick={() => { setError(''); void getQuiz(q.id).then(setQuiz).catch(e => setError(e.message)); }}>{q.title}<span>{q.status.replaceAll('_', ' ')}</span></button>)}
     </div> : <>
-      <div className={styles.progress}><strong>{quiz.title}</strong><span>{quiz.summary.attempted} of {quiz.count} answered</span>{quiz.mode === 'timed_short_quiz' && <span aria-live="polite">Time left {secondsLeft} seconds</span>}</div>
+      <div className={styles.progress}><strong>{quiz.title}</strong><span>{quiz.summary.attempted} of {quiz.count} answered</span><div className={styles.progressTrack} aria-hidden="true"><motion.span initial={false} animate={{ width: `${(quiz.summary.attempted / quiz.count) * 100}%` }} transition={reduceMotion ? { duration: 0 } : { duration: 0.24, ease: 'easeOut' }} /></div>{quiz.mode === 'timed_short_quiz' && <span aria-live="polite">Time left {secondsLeft} seconds</span>}</div>
       {timeExpired && <div className={styles.card} role="status"><h2>Time is up</h2><p>Your saved work is still available, but this timed quiz no longer accepts answers.</p></div>}
-      {quiz.current && quiz.status !== 'paused' && !timeExpired && <AssessmentCard key={quiz.current.id} item={quiz.current} busy={busy} attempt={quiz.attempts.find(a => a.id === quiz.current?.attemptId)}
+      <AnimatePresence mode="wait">{quiz.current && quiz.status !== 'paused' && !timeExpired && <motion.div key={quiz.current.id} initial={reduceMotion ? false : { opacity: 0, x: 10 }} animate={{ opacity: 1, x: 0 }} exit={reduceMotion ? undefined : { opacity: 0, x: -10 }} transition={{ duration: 0.2, ease: 'easeOut' }}><AssessmentCard item={quiz.current} busy={busy} attempt={quiz.attempts.find(a => a.id === quiz.current?.attemptId)}
         onAnswer={answer => void act(`/quizzes/${quiz.id}/attempts`, { ...answer, presentationId: quiz.current!.id, expectedRevision: quiz.revision })}
         onHint={() => void act(`/presentations/${quiz.current!.id}/hints`, {})}
-        onChallenge={reason => void act(`/attempts/${quiz.current!.attemptId}/challenges`, { reason })} onCreateRepairNote={onCreateRepairNote} onOpenSource={openWorkspaceSource} />}
+        onChallenge={reason => void act(`/attempts/${quiz.current!.attemptId}/challenges`, { reason })} onCreateRepairNote={onCreateRepairNote} onOpenSource={openWorkspaceSource} /></motion.div>}</AnimatePresence>
       {quiz.status !== 'completed' && quiz.current?.attemptId && <Button disabled={busy} variant="outline" onClick={() => void act(`/quizzes/${quiz.id}/retry`, { expectedRevision: quiz.revision })}>Try again with help</Button>}
       {quiz.status === 'completed' ? <div className={styles.card}><h2>Session complete</h2><p>{quiz.summary.score === null ? 'No scored answers yet.' : `${quiz.summary.score}% across ${quiz.summary.evaluated} evaluated answers.`}</p><p>{quiz.summary.assisted} with help · {quiz.summary.skipped} skipped · {quiz.summary.dontKnow} marked “I don’t know”</p><p className={styles.meta}>Practice score, not mastery. Questions adapt, so scores are not rankings.</p><div className={styles.actions}><Button variant="outline" onClick={onReturn}>Return to Learn</Button><Button variant="ghost" onClick={() => { setQuiz(null); localStorage.removeItem(`forma-${scope}`); }}>New quiz</Button></div></div> : <div className={styles.actions}>
         {!timeExpired && (!quiz.current || quiz.current.attemptId) && <Button disabled={busy} onClick={() => void act(`/quizzes/${quiz.id}/next`, { expectedRevision: quiz.revision })}>{quiz.current ? 'Next question' : 'Generate first question'}</Button>}

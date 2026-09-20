@@ -40,7 +40,7 @@ def test_text_upload_extraction_owner_isolation_and_delete(material_api):
 
 
 def test_pdf_without_text_requires_attention(material_api):
-    from pypdf import PdfWriter
+    PdfWriter = pytest.importorskip("pypdf").PdfWriter
     client, _ = material_api
     output = io.BytesIO()
     writer = PdfWriter()
@@ -83,14 +83,15 @@ def test_invalid_upload_never_enters_processing(material_api):
     ("image/png", "diagram.png", b"\x89PNG\r\n\x1a\n" + b"image-bytes"),
     ("image/jpeg", "photo.jpg", b"\xff\xd8\xff" + b"image-bytes"),
 ])
-def test_image_upload_is_stored_and_requires_visual_interpretation(material_api, media_type, filename, raw):
-    client, _ = material_api
+def test_image_upload_is_ready_for_visual_context(material_api, media_type, filename, raw):
+    client, store = material_api
     item = client.post("/v1/materials", json={"title": filename, "mediaType": media_type, "byteCount": len(raw)}).json()
     assert client.put(item["uploadPath"], content=raw).status_code == 200
     detail = client.get(f"/v1/materials/{item['materialId']}").json()
-    assert detail["status"] == "needs_attention"
+    assert detail["status"] == "ready"
     assert detail["issues"][0]["pageIndex"] == 0
-    assert "visual interpretation" in detail["issues"][0]["message"]
+    assert "visual analysis" in detail["issues"][0]["message"]
+    assert detail["parser"] == "vision-context-v1"
 
 
 def test_image_upload_rejects_mismatched_signature(material_api):
@@ -99,7 +100,26 @@ def test_image_upload_rejects_mismatched_signature(material_api):
     item = client.post("/v1/materials", json={"title": "bad.png", "mediaType": "image/png", "byteCount": len(raw)}).json()
     response = client.put(item["uploadPath"], content=raw)
     assert response.status_code == 422
-    assert response.json()["error"]["code"] == "invalid_image"
+    body = response.json()
+    error = body.get("error") or body.get("detail")
+    assert error["code"] == "invalid_image"
+
+
+def test_attached_image_becomes_bounded_provider_context(material_api):
+    from backend.app.models import utc_now, TopicScope
+    from backend.app.graph_generator import GraphGenerator
+    from backend.app.session_models import LearningSession
+    client, store = material_api
+    scope = TopicScope(id="scope_vision", topic="Diagrams", resolved_meaning="Diagrams", objective="Learn", depth="introductory", created_at=utc_now())
+    store.save_scope(scope); graph = GraphGenerator().generate(scope); store.save_graph(graph)
+    store.save_session(LearningSession(id="session_vision", graph_id=graph.id, created_at=utc_now(), updated_at=utc_now()))
+    raw = b"\x89PNG\r\n\x1a\n" + b"diagram-bytes"
+    item = client.post("/v1/materials", json={"title": "diagram.png", "mediaType": "image/png", "byteCount": len(raw)}).json()
+    assert client.put(item["uploadPath"], content=raw).status_code == 200
+    assert client.post("/v1/sessions/session_vision/materials", json={"materialVersionId": item["versionId"]}).status_code == 200
+    images = MaterialService(store).image_context("local", "session_vision")
+    assert len(images) == 1
+    assert images[0].media_type == "image/png" and images[0].data == raw and images[0].title == "diagram.png"
 
 
 def test_retrieval_excludes_answer_keys_and_respects_attachment_and_budget(material_api):

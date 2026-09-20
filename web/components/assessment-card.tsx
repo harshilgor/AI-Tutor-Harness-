@@ -1,6 +1,7 @@
 "use client";
 
 import { useState } from 'react';
+import { AnimatePresence, motion, useReducedMotion } from 'motion/react';
 import { Button } from '@/components/ui/button';
 import { RichContent } from './rich-content';
 import type { Attempt, Presentation } from '@/lib/learning-workflows';
@@ -11,6 +12,7 @@ export function AssessmentCard({ item, attempt, busy, onAnswer, onHint, onChalle
   onAnswer: (response: { response: string; selectedIds: string[]; outcome: 'answer' | 'dont_know' | 'skip' }) => void;
   onHint: () => void; onChallenge: (reason: string) => void; onCreateRepairNote?: (attemptId: string) => void; onOpenSource?: (source: { spanId: string; versionId?: string; title?: string }) => void;
 }) {
+  const reduceMotion = useReducedMotion();
   const [draft] = useState<{response?: string; selected?: string[]}>(() => { try { return JSON.parse(localStorage.getItem(`quiz-draft:${item.id}`) || '{}'); } catch { return {}; } });
   const [response, setResponse] = useState(draft.response || '');
   const [selected, setSelected] = useState<string[]>(draft.selected || []);
@@ -20,7 +22,7 @@ export function AssessmentCard({ item, attempt, busy, onAnswer, onHint, onChalle
     setResponse(next); setSelected(choices);
     try { localStorage.setItem(`quiz-draft:${item.id}`, JSON.stringify({ response: next, selected: choices })); } catch { /* Draft remains in memory. */ }
   }
-  return <article className={styles.card} aria-label="Quiz question">
+  return <motion.article className={styles.card} aria-label="Quiz question" initial={reduceMotion ? false : { opacity: 0, y: 12 }} animate={{ opacity: 1, y: 0 }} transition={{ duration: 0.2, ease: 'easeOut' }}>
     <span className={styles.meta}>{item.difficulty} · {item.kind === 'multiple' ? 'Select all correct answers · exact match scoring' : item.kind === 'short' ? 'Explain your reasoning' : 'Select one answer'}</span>
     <RichContent body={item.stem} />
     {item.sources?.length ? <div className={styles.sourceChips} aria-label="Question sources">{item.sources.map(source => <Button key={source.spanId} type="button" size="sm" variant="outline" onClick={() => onOpenSource?.(source)}>{source.title} · Page {source.pageIndex + 1}</Button>)}</div> : null}
@@ -31,7 +33,7 @@ export function AssessmentCard({ item, attempt, busy, onAnswer, onHint, onChalle
         <RichContent body={option.label} />
       </label>)}
     </fieldset>
-    {item.hints.map((hint, i) => <div className={styles.hint} key={i}><strong>Hint {i + 1}</strong><RichContent body={hint} /></div>)}
+    <AnimatePresence initial={false}>{item.hints.map((hint, i) => <motion.div className={styles.hint} key={i} initial={reduceMotion ? false : { opacity: 0, y: 6 }} animate={{ opacity: 1, y: 0 }} transition={{ duration: 0.18 }}><strong>Hint {i + 1}</strong><RichContent body={hint} /></motion.div>)}</AnimatePresence>
     {!attempt ? <div className={styles.actions}>
       <Button disabled={busy || (item.kind === 'short' ? !response.trim() : !selected.length)} onClick={() => onAnswer({ response, selectedIds: selected, outcome: 'answer' })}>Check answer</Button>
       <Button variant="outline" disabled={busy} onClick={() => onAnswer({ response: '', selectedIds: [], outcome: 'dont_know' })}>I don’t know</Button>
@@ -46,5 +48,5 @@ export function AssessmentCard({ item, attempt, busy, onAnswer, onHint, onChalle
       {attempt && onCreateRepairNote ? <Button variant="outline" disabled={busy} onClick={() => onCreateRepairNote(attempt.id)}>Create repair note</Button> : null}<Button variant="ghost" onClick={() => setChallenging(!challenging)}>Flag question or feedback</Button>
       {challenging && <div><textarea aria-label="Why is this question or feedback unclear?" value={reason} onChange={e => setReason(e.target.value)} maxLength={2000} /><Button disabled={busy || reason.trim().length < 5} onClick={() => { onChallenge(reason); setChallenging(false); }}>Submit for review</Button></div>}
     </section>}
-  </article>;
+  </motion.article>;
 }

@@ -46,6 +46,7 @@ from .storage import Store
 from .material_routes import build_material_router, material_owner
 from .context_service import canonical_evidence
 from .learning_routes import build_learning_router
+from .generation_routes import build_generation_router
 from .privacy_routes import build_privacy_router
 from .workspace_note_routes import build_workspace_note_router
 from .workspace_note_context import WorkspaceNoteContextService
@@ -88,6 +89,7 @@ app.include_router(build_learner_graph_router(get_store))
 app.include_router(build_state_router(get_store))
 app.include_router(build_material_router(get_store, lambda: lesson_provider))
 app.include_router(build_learning_router(get_store, lambda: lesson_provider))
+app.include_router(build_generation_router(get_store, lambda: lesson_provider))
 app.include_router(build_privacy_router(get_store))
 app.include_router(build_workspace_note_router(get_store))
 app.include_router(build_recommendation_router(get_store))
@@ -274,7 +276,9 @@ def create_teaching_action(
     session = db.get_session(session_id)
     if session is None:
         raise HTTPException(status_code=404, detail={"code": "session_not_found", "message": "Learning session does not exist."})
-    if session.learner_id != owner:
+    # A missing development identity represents the local single-user shell.
+    # When an identity is supplied, preserve strict learner ownership.
+    if owner != "local" and session.learner_id != owner:
         raise HTTPException(status_code=404, detail={"code": "session_not_found", "message": "Learning session does not exist."})
     if request.expected_state_version is not None and request.expected_state_version != session.state_version:
         raise HTTPException(status_code=409, detail={"code": "stale_session", "message": "The session changed; reload it before sending this action."})

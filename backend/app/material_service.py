@@ -138,6 +138,22 @@ class MaterialService:
             ids = c.execute(text("SELECT a.version_id FROM material_attachments a JOIN material_versions v ON v.id=a.version_id JOIN materials m ON m.id=v.material_id WHERE a.session_id=:sid AND m.owner_id=:owner AND m.deleted=false"), {"sid": sid, "owner": owner}).scalars().all()
         return list(ids)
 
+    def image_context(self, owner, sid, *, max_images=4, byte_budget=20 * 1024 * 1024):
+        from .model_provider import ImageInput
+        images, used = [], 0
+        for version_id in self.attachments(owner, sid):
+            version = self.version(owner, version_id)
+            if not version["media_type"].startswith("image/"):
+                continue
+            raw = self.object_path(version["object_key"]).read_bytes()
+            if used + len(raw) > byte_budget:
+                problem("image_context_too_large", "Attached images exceed the 20 MB vision context budget.", 413)
+            images.append(ImageInput(media_type=version["media_type"], data=raw, title=version["title"]))
+            used += len(raw)
+            if len(images) == max_images:
+                break
+        return images
+
     def detach(self, owner, sid, vid):
         self.session(owner, sid)
         with self.store.transaction() as c:
@@ -203,7 +219,7 @@ class MaterialService:
                     problem("page_too_large", "A PDF page exceeds the text budget")
                 pages.append(extracted)
         elif v["media_type"].startswith("image/"):
-            issues.append({"pageIndex": 0, "message": "Image uploaded successfully. Visual interpretation is not enabled yet; attach a transcript or paste the relevant text to ask questions."})
+            issues.append({"pageIndex": 0, "message": "Image is ready for visual analysis by a vision-capable model. No searchable OCR text was produced."})
         else:
             pages = [raw.decode("utf-8-sig")]
         blocks = []
@@ -227,7 +243,7 @@ class MaterialService:
                             end = boundary
                     passage, chunk = chunk[:end], chunk[end:].strip()
                     blocks.append({"id": uid("span"), "page": index, "text": passage, "kind": "private_solution" if v["role"] == "answer_key" else "passage"})
-        status = "needs_attention" if v["media_type"].startswith("image/") else "partially_ready" if issues and blocks else "needs_attention" if not blocks else "ready"
+        status = "ready" if v["media_type"].startswith("image/") else "partially_ready" if issues and blocks else "needs_attention" if not blocks else "ready"
         with self.store.transaction() as c:
             self.version(job["owner_id"], v["id"], c)
             changed = c.execute(text("UPDATE material_jobs SET status='completed',payload=:payload WHERE id=:id AND lease=:lease AND status='running'"), {"id": job["id"], "lease": job["lease"], "payload": encoded({"blockCount": len(blocks), "issues": issues})}).rowcount
@@ -236,7 +252,7 @@ class MaterialService:
             c.execute(text("DELETE FROM material_blocks WHERE version_id=:id"), {"id": v["id"]})
             for ordinal, b in enumerate(blocks):
                 c.execute(text("INSERT INTO material_blocks(id,version_id,page_index,ordinal,kind,text,payload) VALUES(:id,:vid,:page,:ordinal,:kind,:text,:payload)"), {**b, "vid": v["id"], "ordinal": ordinal, "payload": encoded({"extractionStatus": "text_extracted_not_layout_verified", "textHash": hashlib.sha256(b["text"].encode()).hexdigest()})})
-            parser = "pypdf-text-v1" if v["media_type"] == "application/pdf" else "image-upload-v1" if v["media_type"].startswith("image/") else "utf8-v1"
+            parser = "pypdf-text-v1" if v["media_type"] == "application/pdf" else "vision-context-v1" if v["media_type"].startswith("image/") else "utf8-v1"
             c.execute(text("UPDATE material_versions SET status=:status,payload=:payload WHERE id=:id"), {"id": v["id"], "status": status, "payload": encoded({"pageCount": len(pages), "blockCount": len(blocks), "issues": issues, "parser": parser, "searchMode": "lexical"})})
 
     def job(self, owner, jid):
