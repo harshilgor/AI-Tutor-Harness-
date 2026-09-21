@@ -40,11 +40,11 @@ def test_migrations_upgrade_legacy_sqlite_without_erasing_history(tmp_path):
     store = Store(path)
     assert store.get_scope(scope.id) == scope
     tables = set(inspect(store.engine).get_table_names())
-    assert {"alembic_version", "evidence", "learner_concept_states", "branches", "notes", "workspace_notes", "workspace_note_links"} <= tables
+    assert {"alembic_version", "evidence", "learner_concept_states", "branches", "notes", "workspace_notes", "workspace_note_links", "concept_memory_states", "concept_relationships"} <= tables
     with store.engine.connect() as migrated:
         revision = migrated.execute(text("SELECT version_num FROM alembic_version")).scalar_one()
         position = migrated.execute(text("SELECT learner_id, state_version FROM learning_sessions WHERE id='session_legacy'")).mappings().one()
-    assert revision == "0013_note_section_provenance"
+    assert revision == "0014_review_memory"
     assert dict(position) == {"learner_id": "local", "state_version": 3}
     store.close()
 

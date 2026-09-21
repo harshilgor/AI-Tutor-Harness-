@@ -1,8 +1,8 @@
-.banner{display:flex;align-items:center;gap:10px;max-width:780px;margin:14px auto 0;padding:10px 14px;border:1px solid #e3e8db;border-radius:10px;background:#f7f9f2;color:#53614c;font-size:13px;line-height:1.5}
+.banner{display:flex;align-items:center;gap:10px;max-width:760px;margin:14px auto 0;padding:10px 14px;border:1px solid #e3e8db;border-radius:10px;background:#f7f9f2;color:#53614c;font-size:13px;line-height:1.5}
 .banner svg{flex:none;color:#798c68}
 .banner span{min-width:0;flex:1}
 .banner strong{color:#394731}
-.list{display:grid;gap:12px;max-width:780px;margin:14px auto 0}
+.list{display:grid;gap:12px;max-width:760px;margin:14px auto 0}
 .proposal{border:1px solid #e3e8db;border-radius:12px;padding:16px 18px;background:#fff;box-shadow:0 8px 24px rgba(31,34,33,.04)}
 .proposalHead{display:grid;gap:4px;margin-bottom:10px}
 .proposalEyebrow{font-size:10px;letter-spacing:1px;color:#80916f;font-weight:650}
@@ -14,6 +14,11 @@
 .editor:focus{outline:2px solid #b7c7ad;outline-offset:1px}
 .error{margin:0 0 10px;color:#9b4c43;font-size:12px}
 .actions{display:flex;flex-wrap:wrap;gap:8px}
+.updated{display:flex;align-items:center;gap:8px;max-width:780px;margin:14px auto 0;padding:10px 14px;border:1px solid #dfe5d6;border-radius:10px;background:#eff3e9;color:#43513e;font-size:13px}
+.updated svg{flex:none;color:#61765a}
+.updated span{min-width:0;flex:1;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.updated button{flex:none;border:0;border-radius:6px;padding:4px 8px;background:transparent;color:#51604a;font-size:12px}
+.updated button:hover{background:#e2e9dc}
 .studyBar{display:flex;align-items:center;gap:8px;padding:8px 14px;border-bottom:1px solid #edf0eb;background:#fafcf8;color:#5b6656;font-size:12px}
 .studyBar>svg{flex:none;color:#798c68}
 .studyBarText{min-width:0;flex:1;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}

@@ -76,8 +76,16 @@ class RecommendationService:
         current_id = (steps[position].get("conceptId") if steps else None) or session.current_concept_id or graph.concepts[0].id
         current = by_id.get(current_id, graph.concepts[0])
         candidates: list[dict] = []
-        # Due schedules are inspected by the policy, but hard-excluded until the durable review runner arrives in Work Package 5.
-        self._due_review(owner, set(by_id))
+        # Due schedules surface as review recommendations once the review runner is available.
+        due = self._due_review(owner, set(by_id))
+        if due:
+            concept_id, due_at = due
+            concept = by_id.get(concept_id)
+            if concept:
+                candidates.append(self._candidate(
+                    action="review", concept=concept, score=95, effort=6, session_id=session_id,
+                    rationale="This concept is due for a short retrieval check.",
+                ))
 
         # Route continuation is preferred, then graph neighbours that depend on
         # the current concept. Hard exclusions happen before scoring.

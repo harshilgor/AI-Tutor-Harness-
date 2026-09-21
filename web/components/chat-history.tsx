@@ -141,7 +141,7 @@ export function ChatHistory({ activeSessionId, refreshKey, onOpen }: {
 
   return (
     <div className={styles.history}>
-      <div className="side-label"><span>Recent chats</span>{sessions.length > 0 && !loading ? <span>{sessions.length}</span> : null}</div>
+      <div className={styles.label}><span>Recent chats</span>{sessions.length > 0 && !loading ? <span className={styles.count}>{sessions.length}</span> : null}</div>
       {sessions.length > 8 && !loading ? (
         <div className={styles.search}><Search size={14} /><input value={query} onChange={event => setQuery(event.target.value)} placeholder="Search chats" aria-label="Search chat history" /></div>
       ) : null}

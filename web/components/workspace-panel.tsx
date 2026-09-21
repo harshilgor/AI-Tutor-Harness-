@@ -1,7 +1,7 @@
 "use client";
 
 import { useCallback, useEffect, useRef, useState, type Dispatch, type SetStateAction } from 'react';
-import { BookOpen, ChevronLeft, FileText, PanelRightClose, Plus, Search, Send, X } from 'lucide-react';
+import { BookOpen, ChevronLeft, FileText, PanelLeft, PanelLeftClose, PanelRightClose, Plus, Search, Send, X } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { LearningApiError, friendlyServiceError, learningApi, request, type WorkspaceNote, type WorkspaceNoteSummary } from '@/lib/api';
 import { QuizWorkspace } from './quiz-workspace';
@@ -43,6 +43,17 @@ function NoteEditor({ closeRequest, onClose, onCloseRequestHandled, onDirtyChang
   const [savedDraft, setSavedDraft] = useState<NoteDraft | null>(null);
   const [query, setQuery] = useState('');
   const [loading, setLoading] = useState(true);
+  const [listCollapsed, setListCollapsed] = useState<boolean>(() => {
+    try { return typeof window !== 'undefined' && localStorage.getItem('forma-notes-list-v1') === 'collapsed'; } catch { return false; }
+  });
+  // The initializer above runs during server rendering (always expanded);
+  // sync the persisted preference on the client after mount.
+  useEffect(() => {
+    const timer = window.setTimeout(() => {
+      try { setListCollapsed(localStorage.getItem('forma-notes-list-v1') === 'collapsed'); } catch { /* Stay expanded. */ }
+    }, 0);
+    return () => window.clearTimeout(timer);
+  }, []);
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState('');
   const [pendingAction, setPendingAction] = useState<(() => void) | null>(null);
@@ -210,25 +221,44 @@ function NoteEditor({ closeRequest, onClose, onCloseRequestHandled, onDirtyChang
     onUseInChat?.();
   }
 
-  return <section className={`${styles.notes} ${fullPage ? styles.notesHome : ''}`} aria-label="Notes workspace">
+  function setListCollapsedPersisted(collapsed: boolean) {
+    setListCollapsed(collapsed);
+    try { localStorage.setItem('forma-notes-list-v1', collapsed ? 'collapsed' : 'expanded'); } catch { /* Layout preference is optional. */ }
+  }
+
+  return <section className={`${styles.notes} ${fullPage ? styles.notesHome : ''} ${listCollapsed ? styles.listCollapsed : ''}`} aria-label="Notes workspace">
     <div className={styles.noteList}>
       <div className={styles.noteListTop}>
+        <button type="button" className={styles.listToggle} title="Hide note list" aria-label="Hide note list" aria-expanded="true" onClick={() => setListCollapsedPersisted(true)}><PanelLeftClose size={15} /></button>
         <div className={styles.search}><Search size={15} /><input value={query} onChange={event => setQuery(event.target.value)} placeholder="Search notes" aria-label="Search notes" /></div>
         <Button type="button" size="icon-sm" variant="outline" onClick={startBlank} aria-label="Create blank note"><Plus size={16} /></Button>
       </div>
       <div className={styles.noteItems} aria-live="polite">
         {loading && notes.length === 0 ? <p className={styles.muted}>Loading notes…</p> : null}
         {!loading && notes.length === 0 ? <div className={styles.emptyList}><FileText size={18} /><span>{query ? 'No matching notes.' : 'No notes yet.'}</span></div> : null}
-        {notes.map(note => <button type="button" key={note.id} className={`${styles.noteItem} ${draft?.id === note.id ? styles.selected : ''}`} onClick={() => void openNote(note.id)}>
-          <strong>{note.title}</strong><small>Edited {new Date(note.updatedAt).toLocaleDateString()}</small>
-        </button>)}
+        {(() => {
+          const lessons = notes.filter(note => (note.frontmatter as Record<string, unknown> | undefined)?.study_note === true);
+          const mine = notes.filter(note => (note.frontmatter as Record<string, unknown> | undefined)?.study_note !== true);
+          const row = (note: typeof notes[number]) => (
+            <button type="button" key={note.id} className={`${styles.noteItem} ${draft?.id === note.id ? styles.selected : ''}`} onClick={() => void openNote(note.id)}>
+              <strong>{note.title}</strong><small>Edited {new Date(note.updatedAt).toLocaleDateString()}</small>
+            </button>
+          );
+          return <>
+            {lessons.length > 0 && mine.length > 0 ? <div className={styles.groupLabel}>Your Notes</div> : null}
+            {mine.map(row)}
+            {lessons.length > 0 ? <div className={styles.groupLabel}>Lessons · generated through Learn</div> : null}
+            {lessons.map(row)}
+          </>;
+        })()}
       </div>
     </div>
     <div className={styles.editor}>
+      {listCollapsed || draft ? <div className={styles.editorTop}>
+        {listCollapsed ? <button type="button" className={styles.listToggle} title="Show note list" aria-label="Show note list" aria-expanded="false" onClick={() => setListCollapsedPersisted(false)}><PanelLeft size={15} /></button> : null}
+        {draft ? <input value={draft.title} onChange={event => setDraft(current => current ? { ...current, title: event.target.value } : current)} aria-label="Note title" placeholder="Note title" /> : <span className={styles.focusHint}>Focus on writing</span>}
+      </div> : null}
       {!draft ? <div className={styles.emptyEditor}><BookOpen size={28} /><h2>Capture what matters</h2><p>Keep your own explanations, examples, and questions in local Markdown notes.</p><Button type="button" onClick={startBlank}><Plus size={16} />New note</Button></div> : <>
-        <div className={styles.editorTop}>
-          <input value={draft.title} onChange={event => setDraft(current => current ? { ...current, title: event.target.value } : current)} aria-label="Note title" placeholder="Note title" />
-        </div>
         <StudyNoteBar draft={draft} onChanged={(revision, frontmatter) => { const apply = (current: NoteDraft | null): NoteDraft | null => current && current.id ? { ...current, revision, frontmatter } : current; setDraft(apply); setSavedDraft(apply); }} />
         {(() => { const sessionIds = Array.isArray(draft.frontmatter?.session_ids) ? draft.frontmatter.session_ids as string[] : []; const sid = sessionIds[0]; const noteId = draft.id; return noteId && draft.frontmatter?.study_note === true && typeof sid === 'string' ? <NoteProposalList sessionId={sid} refreshKey={0} onChanged={() => void loadNote(noteId)} /> : null; })()}
         <div className={styles.status} role="status">{saving ? 'Saving…' : dirty ? 'Saving changes…' : draft.id ? 'Saved locally' : 'Start typing to create this note'}</div>

@@ -112,7 +112,7 @@ export function ChatComposer({ value, onChange, attachments, onAttachmentsChange
     if (!element) return;
     const maxHeight = 196;
     element.style.height = '0px';
-    const height = Math.min(Math.max(element.scrollHeight, 72), maxHeight);
+    const height = Math.min(Math.max(element.scrollHeight, 44), maxHeight);
     element.style.height = `${height}px`;
     element.style.overflowY = element.scrollHeight > maxHeight ? 'auto' : 'hidden';
   }, []);

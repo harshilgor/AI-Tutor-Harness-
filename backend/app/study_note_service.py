@@ -39,6 +39,29 @@ def _section_markdown(heading: str, body: str) -> str:
     return f"\n\n## {heading.strip()}\n\n{body.strip()}\n"
 
 
+def _section_record_hash(heading: str, body: str) -> str:
+    """Hash the canonical tutor section form used in the note body."""
+    return _content_hash(f"## {heading.strip()}\n\n{body.strip()}\n")
+
+
+def _section_body_from_slice(section_slice: str) -> str:
+    """Extract the markdown body beneath a ``## heading`` slice."""
+    if section_slice.startswith("## "):
+        newline = section_slice.find("\n")
+        if newline < 0:
+            return ""
+        return section_slice[newline + 1:].strip()
+    return section_slice.strip()
+
+
+def _hashes_match(stored: str, section_slice: str, body: str) -> bool:
+    """True when stored hash matches the live section or legacy body-only hashes."""
+    if stored == _content_hash(section_slice):
+        return True
+    extracted = _section_body_from_slice(section_slice)
+    return stored in {_content_hash(extracted), _content_hash(body.strip()), _content_hash(f"{extracted}\n")}
+
+
 def _find_section(body: str, heading: str) -> tuple[int, int] | None:
     """Locate (start, end) offsets of a ``## heading`` section, or None."""
     lines = body.splitlines(keepends=True)
@@ -89,12 +112,18 @@ class StudyNoteService:
         title = (session.title or "").strip() or short_title(session.goal)
         if title == "Untitled conversation":
             title = "Study notes"
+        # Auto-apply by default so Learn can quietly grow the Lesson while the
+        # learner stays in chat. Ask/never remain available from Notes settings.
         return self.notes.create(
             owner,
             WorkspaceNoteCreate(
                 title=title,
-                body=f"# {title}\n\nStudy notes maintained with the tutor. Your own writing is never rewritten.\n",
-                frontmatter={"study_note": True, "session_ids": [sid], "tutor_updates": "ask"},
+                body=(
+                    f"# {title}\n\n"
+                    "This lesson grows as you learn. The tutor adds durable ideas here—"
+                    "not a chat transcript. Your own writing is never rewritten.\n"
+                ),
+                frontmatter={"study_note": True, "session_ids": [sid], "tutor_updates": "auto"},
             ),
         )
 
@@ -218,6 +247,18 @@ class StudyNoteService:
                 return concept.title
         return None
 
+    def _match_tutor_section(self, rows: list, heading: str) -> str | None:
+        """Return a tutor-owned section_id whose heading matches, else None."""
+        target = heading.strip().lower()
+        if not target:
+            return None
+        for row in rows:
+            if row.get("tombstoned") or row.get("owner_kind") != "tutor":
+                continue
+            if str(row.get("heading") or "").strip().lower() == target:
+                return row["section_id"]
+        return None
+
     def prepare(self, owner, sid, command: ProposalCreate):
         session = self._session(owner, sid)
         provider = self._require_provider()
@@ -267,35 +308,65 @@ class StudyNoteService:
             context = {"question": question, "lesson": lesson_text, "conceptId": concept_id, "conceptTitle": concept_title}
         if self._tombstoned(owner, note.id, created_from):
             return {"skipped": "tombstoned", "sessionId": sid, "noteId": note.id}
-        existing_headings = [
-            row["heading"] for row in self._provenance_rows(owner, note.id) if not row["tombstoned"]
-        ]
+        mode = self.tutor_updates_mode(note)
+        if mode == "never":
+            return {"skipped": "tutor_updates_never", "sessionId": sid, "noteId": note.id}
+        existing_rows = [row for row in self._provenance_rows(owner, note.id) if not row["tombstoned"]]
+        existing_sections = []
+        for row in existing_rows:
+            located = _find_section(note.body, row["heading"])
+            excerpt = ""
+            if located is not None:
+                excerpt = note.body[located[0]:located[1]].strip()[:500]
+            existing_sections.append({
+                "sectionId": row["section_id"],
+                "heading": row["heading"],
+                "ownerKind": row["owner_kind"],
+                "excerpt": excerpt,
+            })
+        existing_headings = [row["heading"] for row in existing_rows]
         if command.origin == "quiz":
             lines = "\n".join(f"- {item['concept']}: {(item['feedback'] or 'review the underlying idea')}" for item in context["weak"])
             prompt = (
                 "Write a short review checklist for a learner's study note. Return JSON only: "
-                '{"heading": "To review", "body": "markdown checklist"}. Keep the body under 400 words, '
+                '{"action": "add", "heading": "To review", "body": "markdown checklist"}. Keep the body under 400 words, '
                 "one line per gap, no scores, no chat transcript.\n"
                 + json.dumps({"gaps": context["weak"], "checklistDraft": lines}, ensure_ascii=False)
             )
         elif command.origin == "insight":
             prompt = (
                 "Distill one useful insight from this side exploration into a study-note section. Return JSON only: "
-                '{"heading": "short section title", "body": "concise markdown (under 250 words)"}. '
-                "Never include chat transcript or questions asked. Write timeless reference prose.\n"
+                '{"action": "add"|"refine"|"skip", "heading": "short section title", '
+                '"match_heading": "existing heading when refining or null", '
+                '"body": "concise markdown (under 250 words)"}. '
+                "Prefer refine when an existing section covers the same idea. "
+                "Skip chatter with no durable knowledge. Never include chat transcript or questions asked. "
+                "Write timeless reference prose.\n"
                 + json.dumps({"exploration": context["label"], "content": context["insight"],
-                              "existingSections": existing_headings}, ensure_ascii=False)
+                              "existingSections": existing_sections}, ensure_ascii=False)
             )
         else:
             prompt = (
-                "Distill durable knowledge from this tutoring turn into one study-note section. Return JSON only: "
-                '{"heading": "short section title", "body": "concise markdown (under 350 words)", '
-                '"concept_title": "concept name or null"}. Never include chat transcript, questions asked, '
-                "or quiz scores. Write timeless reference prose.\n"
+                "You maintain a living Lesson study document for one Learn session. "
+                "Decide whether this tutoring turn adds durable knowledge worth keeping. Return JSON only: "
+                '{"action": "add"|"refine"|"skip", "heading": "short section title", '
+                '"match_heading": "exact existing heading when refining, else null", '
+                '"body": "concise markdown (under 350 words)", "concept_title": "concept name or null"}. '
+                "Rules: never copy the chat transcript or learner questions; write timeless reference prose; "
+                "skip greetings, logistics, and shallow restatements; "
+                "when the turn deepens an existing section, set action=refine and match_heading to that section; "
+                "when refining, rewrite the full section body so it absorbs the new depth without duplication; "
+                "only use action=add for a genuinely new topic; avoid redundant near-duplicate headings.\n"
                 + json.dumps({"question": context["question"], "lesson": context["lesson"],
-                              "existingSections": existing_headings}, ensure_ascii=False)
+                              "existingSections": existing_sections,
+                              "existingHeadings": existing_headings}, ensure_ascii=False)
             )
         raw = provider.complete_json(prompt, 1500)
+        action = str(raw.get("action", "add")).strip().lower()
+        if action not in {"add", "refine", "skip"}:
+            action = "add"
+        if action == "skip":
+            return {"skipped": "no_durable_content", "sessionId": sid, "noteId": note.id}
         heading = str(raw.get("heading", "")).strip()[:300]
         body = str(raw.get("body", "")).strip()[:12000]
         if not heading or not body:
@@ -303,31 +374,50 @@ class StudyNoteService:
         concept_title = context.get("conceptTitle") or (str(raw.get("concept_title", "")).strip() or None)
         graph_concept_id = context.get("conceptId")
         learner_concept_id = self.resolve_learner_concept(owner, graph_concept_id)
+        section_id = command.section_id
+        match_heading = str(raw.get("match_heading") or "").strip()
+        if section_id is None and (action == "refine" or match_heading or heading):
+            section_id = self._match_tutor_section(existing_rows, match_heading or heading)
+            if section_id is not None and match_heading:
+                # Keep the learner-facing heading stable when refining.
+                for row in existing_rows:
+                    if row["section_id"] == section_id:
+                        heading = row["heading"]
+                        break
+            elif action == "refine" and section_id is None:
+                # Model asked to refine but nothing matched — fall back to add.
+                action = "add"
         proposal = NoteProposal(
             id=uid("noteprop"), session_id=sid, note_id=note.id, origin=command.origin,
-            heading=heading, body=body, section_id=command.section_id,
+            heading=heading, body=body, section_id=section_id,
             concept_title=concept_title, graph_concept_id=graph_concept_id,
             learner_concept_id=learner_concept_id,
             source={"createdFrom": created_from, "question": context.get("question"),
                     "lessonId": lesson_id or None, "label": context.get("label"),
                     "attemptIds": command.attempt_ids, "turnIndex": command.turn_index,
-                    "expectedNoteRevision": command.expected_note_revision},
+                    "expectedNoteRevision": command.expected_note_revision,
+                    "applyKind": "refined" if section_id else "added"},
         )
         return {"proposal": proposal, "sessionId": sid, "noteId": note.id,
-                "mode": self.tutor_updates_mode(note), "createdFrom": created_from}
+                "mode": mode, "createdFrom": created_from}
 
     def commit(self, conn, owner, prepared):
         if prepared.get("skipped"):
-            return {"sessionId": prepared["sessionId"], "skipped": prepared["skipped"]}
+            return {"sessionId": prepared["sessionId"], "noteId": prepared.get("noteId"),
+                    "skipped": prepared["skipped"], "status": "skipped"}
         proposal: NoteProposal = prepared["proposal"]
         created_from = proposal.source.get("createdFrom", "")
+        apply_kind = "refined" if proposal.section_id else "added"
         # Collapse only open duplicates (e.g. job retries): an applied record
         # must not block refresh proposals, or tombstone/shared flows break.
         # Body duplication on retry is prevented by the idempotency guard in
         # _apply_in instead.
         for record in self.list_proposals(owner, proposal.session_id):
             if record.get("source", {}).get("createdFrom") == created_from and record.get("status") == "proposed":
-                return {"proposalId": record["id"], "status": record["status"]}
+                return {"proposalId": record["id"], "status": record["status"],
+                        "noteId": record.get("note_id") or proposal.note_id,
+                        "heading": record.get("heading") or proposal.heading,
+                        "applyKind": apply_kind}
         if prepared.get("mode") == "auto":
             # Revision gate: the client saw this note revision when requesting
             # synthesis. If the learner edited since, stay proposed instead of
@@ -344,9 +434,27 @@ class StudyNoteService:
                 self.records.put(conn, owner, PROPOSAL_KIND,
                                  proposal.model_copy(update={"status": "applied"}).model_dump(mode="json"),
                                  proposal.session_id)
-                return {"proposalId": proposal.id, "status": "applied"}
+                try:
+                    from .review.concept_sync import ConceptSyncService
+                    session = MaterialService(self.store).session(owner, proposal.session_id)
+                    ConceptSyncService(self.store, self.provider).sync_from_text(
+                        owner,
+                        source_key=f"note_section:{applied['noteId']}:{applied['sectionId']}",
+                        text_value=f"{proposal.heading}\n\n{proposal.body}"[:8000],
+                        graph_id=session.graph_id,
+                        graph_version=session.graph_revision or 1,
+                        source_session_id=proposal.session_id,
+                        source_section_id=applied.get("sectionId"),
+                        parent_concept_id=proposal.graph_concept_id,
+                    )
+                except Exception:
+                    pass
+                return {"proposalId": proposal.id, "status": "applied", "noteId": proposal.note_id,
+                        "heading": proposal.heading, "applyKind": applied.get("applyKind", apply_kind),
+                        "sectionId": applied.get("sectionId")}
         self.records.put(conn, owner, PROPOSAL_KIND, proposal.model_dump(mode="json"), proposal.session_id)
-        return {"proposalId": proposal.id, "status": "proposed"}
+        return {"proposalId": proposal.id, "status": "proposed", "noteId": proposal.note_id,
+                "heading": proposal.heading, "applyKind": apply_kind}
 
     # -- application ---------------------------------------------------------------
 
@@ -393,26 +501,29 @@ class StudyNoteService:
                                          current["created_from"], note.revision, current["content_hash"], tombstoned=True)
                     return None
                 start, end = located
-                live_hash = _content_hash(note.body[start:end])
-                if live_hash != current["content_hash"]:
+                live_slice = note.body[start:end]
+                if not _hashes_match(current["content_hash"], live_slice, _section_body_from_slice(live_slice)):
                     self._record_section(conn, owner, note.id, current["section_id"], current["heading"], "shared",
-                                         current["created_from"], note.revision, live_hash,
+                                         current["created_from"], note.revision, _content_hash(live_slice),
                                          current["concept_title"], current["graph_concept_id"], current["learner_concept_id"])
                     return None
                 new_body = note.body[:start] + f"## {heading}\n\n{body}\n" + note.body[end:]
                 section_id = current["section_id"]
                 owner_kind = "tutor"
+                apply_kind = "refined"
             else:
                 # Idempotent retry: the exact block is already present.
                 if f"## {heading}\n\n{body}" in note.body and prior:
                     current = prior[0]
                     self._record_section(conn, owner, note.id, current["section_id"], current["heading"], "tutor",
-                                         created_from, note.revision, _content_hash(body),
+                                         created_from, note.revision, _section_record_hash(heading, body),
                                          proposal.concept_title, proposal.graph_concept_id, proposal.learner_concept_id)
-                    return {"noteId": note.id, "revision": note.revision, "sectionId": current["section_id"]}
+                    return {"noteId": note.id, "revision": note.revision, "sectionId": current["section_id"],
+                            "applyKind": "added"}
                 new_body = note.body + _section_markdown(heading, body)
                 section_id = uid("sec")
                 owner_kind = "tutor"
+                apply_kind = "added"
         update_revision = expected_note_revision if expected_note_revision is not None else note.revision
         updated = self.notes.update(
             owner, note.id,
@@ -420,9 +531,9 @@ class StudyNoteService:
         )
         with self.store.transaction() as conn:
             self._record_section(conn, owner, note.id, section_id, heading, owner_kind,
-                                 created_from, updated.revision, _content_hash(body),
+                                 created_from, updated.revision, _section_record_hash(heading, body),
                                  proposal.concept_title, proposal.graph_concept_id, proposal.learner_concept_id)
-        return {"noteId": updated.id, "revision": updated.revision, "sectionId": section_id}
+        return {"noteId": updated.id, "revision": updated.revision, "sectionId": section_id, "applyKind": apply_kind}
 
     # -- proposal lifecycle (synchronous routes) --------------------------------------
 

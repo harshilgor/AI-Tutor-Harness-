@@ -177,6 +177,11 @@ class ReviewSchedule(ApiModel):
     interval_days: int = Field(ge=0)
     created_at: datetime
     updated_at: datetime
+    due_reason: str | None = None
+    activity_type: str | None = None
+    confidence_at_schedule: str | None = None
+    scheduler_version: str | None = None
+    priority_score: float | None = None
 
 
 class Position(ApiModel):

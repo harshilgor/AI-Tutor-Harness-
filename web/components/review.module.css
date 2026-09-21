@@ -1,0 +1,262 @@
+.page {
+  max-width: 720px;
+  margin: 0 auto;
+  padding: 28px 24px 80px;
+  display: grid;
+  gap: 20px;
+}
+
+.meta {
+  display: block;
+  font-size: 11px;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: var(--muted-foreground, #6b7366);
+  margin-bottom: 6px;
+}
+
+.page h1 {
+  font-size: 1.65rem;
+  letter-spacing: -0.02em;
+  margin: 0 0 6px;
+  font-weight: 600;
+}
+
+.page h2 {
+  font-size: 1rem;
+  margin: 0 0 10px;
+  font-weight: 600;
+}
+
+.page p {
+  margin: 0;
+  color: var(--muted-foreground, #5c6458);
+  line-height: 1.5;
+}
+
+.hero, .card, .resume, .remediation {
+  border: 1px solid var(--border, #d7ddd0);
+  border-radius: 12px;
+  padding: 18px 18px 16px;
+  background: color-mix(in oklab, white 88%, #e8ebe3);
+}
+
+.hero {
+  display: grid;
+  gap: 16px;
+}
+
+@media (min-width: 720px) {
+  .hero {
+    grid-template-columns: 1.4fr 1fr;
+    align-items: end;
+  }
+}
+
+.stats {
+  list-style: none;
+  padding: 0;
+  margin: 12px 0 0;
+  display: grid;
+  gap: 4px;
+  font-size: 0.92rem;
+  color: #3f473a;
+}
+
+.streak {
+  margin-top: 10px !important;
+  font-size: 0.85rem;
+}
+
+.launch {
+  display: grid;
+  gap: 10px;
+}
+
+.launch label {
+  display: grid;
+  gap: 6px;
+  font-size: 0.85rem;
+}
+
+.launch select, .answerLabel textarea, .option, .optionOn {
+  width: 100%;
+  border: 1px solid var(--border, #cfd6c7);
+  border-radius: 10px;
+  padding: 10px 12px;
+  background: white;
+  font: inherit;
+}
+
+.answerLabel textarea {
+  min-height: 120px;
+  resize: vertical;
+}
+
+.section {
+  display: grid;
+  gap: 8px;
+}
+
+.list, .chips {
+  list-style: none;
+  padding: 0;
+  margin: 0;
+  display: grid;
+  gap: 8px;
+}
+
+.list li {
+  display: grid;
+  gap: 2px;
+  padding: 12px 0;
+  border-top: 1px solid var(--border, #e0e5d9);
+}
+
+.list li:first-child { border-top: 0; padding-top: 0; }
+
+.list strong { font-size: 0.95rem; }
+.list span, .list small { color: var(--muted-foreground, #6b7366); font-size: 0.85rem; }
+
+.chips {
+  grid-template-columns: repeat(auto-fill, minmax(160px, 1fr));
+}
+
+.chips li {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 0.9rem;
+  color: #394731;
+}
+
+.sessionHeader {
+  display: flex;
+  justify-content: space-between;
+  align-items: end;
+  gap: 12px;
+}
+
+.progress {
+  font-variant-numeric: tabular-nums;
+  color: var(--muted-foreground, #6b7366);
+  font-size: 0.9rem;
+}
+
+.conceptRow {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px 12px;
+  align-items: baseline;
+  margin-bottom: 12px;
+}
+
+.conceptRow span {
+  font-size: 0.82rem;
+  color: var(--muted-foreground, #6b7366);
+}
+
+.prompt {
+  font-size: 1.05rem;
+  line-height: 1.55;
+  color: #2f362c !important;
+  margin-bottom: 14px !important;
+}
+
+.options {
+  display: grid;
+  gap: 8px;
+  margin-bottom: 12px;
+}
+
+.option, .optionOn {
+  text-align: left;
+  cursor: pointer;
+}
+
+.optionOn {
+  border-color: #5a6b4f;
+  background: #eef2e8;
+}
+
+.actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  margin-top: 14px;
+}
+
+.feedbackBlock {
+  display: grid;
+  gap: 6px;
+  margin-bottom: 12px;
+}
+
+.feedbackBlock span {
+  font-size: 0.75rem;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  color: var(--muted-foreground, #6b7366);
+}
+
+.confidence {
+  border: 0;
+  padding: 0;
+  margin: 8px 0 0;
+  display: grid;
+  gap: 8px;
+}
+
+.confidence legend {
+  font-size: 0.9rem;
+  font-weight: 600;
+  margin-bottom: 4px;
+}
+
+.confidence label {
+  display: flex;
+  gap: 8px;
+  align-items: center;
+  font-size: 0.92rem;
+}
+
+.hint {
+  font-size: 0.88rem;
+  color: var(--muted-foreground, #6b7366);
+}
+
+.error {
+  color: #a3342b;
+  margin: 0;
+}
+
+.skeleton {
+  height: 72px;
+  border-radius: 12px;
+  background: linear-gradient(90deg, #e8ebe3, #f4f6f0, #e8ebe3);
+  background-size: 200% 100%;
+  animation: shimmer 1.2s ease-in-out infinite;
+}
+
+@keyframes shimmer {
+  0% { background-position: 100% 0; }
+  100% { background-position: -100% 0; }
+}
+
+.resume {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: space-between;
+  gap: 10px;
+  align-items: center;
+}
+
+.remediation {
+  background: #f3f5ef;
+}
+
+@media (max-width: 640px) {
+  .page { padding: 20px 16px 72px; }
+  .page h1 { font-size: 1.4rem; }
+  .actions { position: sticky; bottom: 12px; background: color-mix(in oklab, white 92%, transparent); padding-top: 8px; }
+}

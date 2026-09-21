@@ -154,6 +154,14 @@ class JourneyService:
         session = MaterialService(self.store).session(owner, sid)
         graph = self.store.get_graph(session.graph_id)
         journey.update(mode=command.mode, gear=command.gear.value)
+        if command.mode == "learn":
+            # Living Lesson shell belongs to the Learn session from the first
+            # teaching turn, even before any section is synthesized.
+            try:
+                from .study_note_service import StudyNoteService
+                StudyNoteService(self.store, self.provider).get_or_create_note(owner, sid)
+            except Exception:
+                pass
         if command.mode == "ask" and command.action != "message":
             problem("learn_mode_required", "Switch to Learn to continue the route.", 409)
         if command.action == "next":

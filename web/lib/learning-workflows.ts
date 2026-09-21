@@ -23,7 +23,7 @@ export type Quiz = {
   current: Presentation | null; attempts: Attempt[];
   summary: { score: number | null; evaluated: number; attempted: number; total: number; assisted: number; skipped: number; dontKnow: number; independentCorrect: number; retries: number; contested: number };
 };
-type Job = { id: string; status: 'queued' | 'running' | 'completed' | 'failed' | 'cancelled'; result: { quizId?: string; sessionId?: string; noteDraftId?: string; noteId?: string; proposalId?: string; status?: string; message?: string } | null };
+type Job = { id: string; status: 'queued' | 'running' | 'completed' | 'failed' | 'cancelled'; result: { quizId?: string; sessionId?: string; itemId?: string; attemptId?: string; noteDraftId?: string; noteId?: string; proposalId?: string; status?: string; heading?: string; applyKind?: string; skipped?: string; message?: string } | null };
 export const getJourney = (sid: string) => request<Journey>(`/v1/sessions/${sid}/journey`);
 export const getQuiz = (qid: string) => request<Quiz>(`/v1/quizzes/${qid}`);
 

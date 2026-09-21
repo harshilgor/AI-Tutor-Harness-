@@ -1,12 +1,13 @@
 "use client";
 
 import { useEffect, useRef, useState, type CSSProperties } from 'react';
-import { ArrowDown, ArrowLeft, ArrowRight, ArrowUp, ArrowUpRight, Bookmark, BookOpen, Check, ChevronRight, ChevronsUpDown, CircleHelp, Compass, ExternalLink, FileText, GitBranch, List, Maximize2, Minus, Network, Plus, Search, Settings, Sparkles, X } from 'lucide-react';
+import { ArrowDown, ArrowLeft, ArrowRight, ArrowUp, ArrowUpRight, Bookmark, BookOpen, Check, ChevronRight, ChevronsUpDown, CircleHelp, Compass, ExternalLink, FileText, GitBranch, List, Maximize2, Minus, Network, Plus, RotateCcw, Search, Settings, Sparkles, X } from 'lucide-react';
 import { Sidebar, SidebarContent, SidebarFooter, SidebarHeader, SidebarProvider, SidebarTrigger } from '@/components/ui/sidebar';
 import { Button } from '@/components/ui/button';
 import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuLabel, DropdownMenuSeparator, DropdownMenuShortcut, DropdownMenuTrigger } from '@/components/ui/dropdown-menu';
 import { LearnChat } from '@/components/learn-chat';
 import { QuizWorkspace } from '@/components/quiz-workspace';
+import { ReviewWorkspace } from '@/components/review-workspace';
 import { Tabs, TabsList, TabsTrigger } from '@/components/ui/tabs';
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
 import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle } from '@/components/ui/dialog';
@@ -18,7 +19,7 @@ import { LocalDataSettings } from '@/components/local-data-settings';
 import { WorkspaceSplit } from '@/components/workspace-split';
 import { NotesWorkspace } from '@/components/workspace-panel';
 import { ChatHistory } from '@/components/chat-history';
-import { CHAT_SESSION_OPEN_EVENT } from '@/lib/workspace-events';
+import { CHAT_SESSION_OPEN_EVENT, REVIEW_ASK_TUTOR_EVENT, REVIEW_OPEN_EVENT, REVIEW_RETURN_EVENT, type ReviewAskTutorDetail, type ReviewOpenDetail } from '@/lib/workspace-events';
 import { SettingsPage, type SettingsCategory } from '@/components/settings-page';
 
 type Branch = { id:string;mapId:string;conceptId:string;anchor:string;mode:string;parent:string|null;draft:string;note:string };
@@ -36,11 +37,15 @@ export default function LearningWorkspace(){
  const [state,setState]=useState<Stored>(INITIAL);
  const [learnVersion,setLearnVersion]=useState(0);
  const [ready,setReady]=useState(false);
-  const [view,setView]=useState<'home'|'maps'|'saved'|'topic'|'quiz'|'notes'|'settings'>('home');
+  const [view,setView]=useState<'home'|'maps'|'saved'|'topic'|'quiz'|'notes'|'review'|'settings'>('home');
   const [settingsCategory,setSettingsCategory]=useState<SettingsCategory>('general');
   const [activeSessionId,setActiveSessionId]=useState<string|null>(()=>{try{return localStorage.getItem('forma-chat-session');}catch{return null;}});
   const [historyVersion,setHistoryVersion]=useState(0);
  const [quizContext,setQuizContext]=useState<{sessionId:string;conceptId?:string}|null>(null);
+ const [reviewContext,setReviewContext]=useState<{sessionId?:string;conceptId?:string}|null>(null);
+ const [reviewReturnBanner,setReviewReturnBanner]=useState<string|null>(null);
+ const [askTutorPrompt,setAskTutorPrompt]=useState<string|null>(null);
+ const [reviewDueCount,setReviewDueCount]=useState(0);
  const [mode,setMode]=useState('map');
  const [topic]=useState('');
  const [query,setQuery]=useState('');
@@ -85,6 +90,10 @@ export default function LearningWorkspace(){
    function openSession(id:string|null){try{if(id){localStorage.setItem('forma-chat-session',id);}else{localStorage.removeItem('forma-chat-session');}localStorage.removeItem('forma-job:chat');}catch{/* Optional resume pointer */}setActiveSessionId(id);setQuizContext(null);setLearnVersion(v=>v+1);setHistoryVersion(v=>v+1);setView('home');setBranchId(null);setTimeout(()=>document.getElementById('topic')?.focus(),0);}
   useEffect(()=>{const sync=()=>{try{setActiveSessionId(localStorage.getItem('forma-chat-session'));setHistoryVersion(v=>v+1);}catch{}};window.addEventListener('forma:chat-history-changed',sync);return()=>window.removeEventListener('forma:chat-history-changed',sync);},[]);
   useEffect(()=>{const open=(event:Event)=>{const id=(event as CustomEvent<string>).detail;if(typeof id==='string'&&id)openSession(id);};window.addEventListener(CHAT_SESSION_OPEN_EVENT,open);return()=>window.removeEventListener(CHAT_SESSION_OPEN_EVENT,open);},[]);
+  useEffect(()=>{const open=(event:Event)=>{const detail=(event as CustomEvent<ReviewOpenDetail>).detail||{};setReviewContext({sessionId:detail.sessionId,conceptId:detail.conceptId});setView('review');setBranchId(null);};window.addEventListener(REVIEW_OPEN_EVENT,open);return()=>window.removeEventListener(REVIEW_OPEN_EVENT,open);},[]);
+  useEffect(()=>{const open=(event:Event)=>{const id=(event as CustomEvent<string>).detail;if(typeof id==='string'&&id){setReviewContext({sessionId:id});setView('review');setBranchId(null);setReviewReturnBanner(null);}};window.addEventListener(REVIEW_RETURN_EVENT,open);return()=>window.removeEventListener(REVIEW_RETURN_EVENT,open);},[]);
+  useEffect(()=>{const ask=(event:Event)=>{const detail=(event as CustomEvent<ReviewAskTutorDetail>).detail;if(!detail)return;setAskTutorPrompt(detail.prompt);setReviewReturnBanner(detail.returnReviewSessionId);setView('home');setBranchId(null);};window.addEventListener(REVIEW_ASK_TUTOR_EVENT,ask);return()=>window.removeEventListener(REVIEW_ASK_TUTOR_EVENT,ask);},[]);
+  useEffect(()=>{let active=true;void learningApi.getReviewDashboard().then(dash=>{if(active)setReviewDueCount(dash.dueCount||0);}).catch(()=>undefined);return()=>{active=false;};},[view,historyVersion]);
   function openMap(id:string){const m=maps.find(x=>x.id===id);if(!m)return;setAssistantLesson(null);setState(s=>({...s,mapId:id,conceptId:s.mapId===id?s.conceptId:m.concepts[0].id}));setView('topic');setMode('map');setBranchId(null);setZoom(1);setQuery('');setSelection('');}
  function openConcept(id:string){if(!currentMap.concepts.some(c=>c.id===id))return;setState(s=>({...s,conceptId:id,visited:Array.from(new Set([...s.visited,`${currentMap.id}:${id}`]))}));setMode('lesson');setLocalAction('');setAnswer(null);setCheckOpen(false);setSelection('');setBranchId(null);}
 
@@ -120,17 +129,20 @@ export default function LearningWorkspace(){
   {view==='settings'?<div className="settings-full"><SettingsPage category={settingsCategory} onCategoryChange={setSettingsCategory} onBack={()=>setView('home')} /></div>:<><Sidebar className="forma-sidebar"><SidebarHeader><div className="brand">Open Learn<SidebarTrigger className="collapse-control"/></div></SidebarHeader><SidebarContent>
     <Button variant="outline" className="new-topic" onClick={()=>openSession(null)}><Plus size={16}/>New topic<span>⌘ K</span></Button>
     <button className={'nav-item '+(view==='home'||view==='topic'?'active':'')} onClick={()=>{setView('home');setBranchId(null)}}><Compass size={17}/>Chat</button>
-    <button className={'nav-item '+(view==='quiz'?'active':'')} onClick={()=>{setView('quiz');setBranchId(null)}}><CircleHelp size={17}/>Quiz</button>
     <button className={'nav-item '+(view==='notes'?'active':'')} onClick={()=>{setView('notes');setBranchId(null)}}><FileText size={17}/>Notes</button>
+    <button className={'nav-item '+(view==='review'?'active':'')} onClick={()=>{setView('review');setBranchId(null)}}><RotateCcw size={17}/>Review{reviewDueCount>0?<span className="nav-count">{reviewDueCount}</span>:null}</button>
+    <button className={'nav-item '+(view==='quiz'?'active':'')} onClick={()=>{setView('quiz');setBranchId(null)}}><CircleHelp size={17}/>Quiz</button>
     <ChatHistory activeSessionId={activeSessionId} refreshKey={historyVersion} onOpen={openSession} />
    <div className="side-label">YOUR SPACE</div>
    <button className={'nav-item '+(view==='maps'?'active':'')} onClick={()=>{setView('maps');setBranchId(null)}}><Network size={17}/>Knowledge maps</button>
    <button className={'nav-item '+(view==='saved'?'active':'')} onClick={()=>{setView('saved');setBranchId(null)}}><BookOpen size={17}/>Saved explorations{state.saved.length+state.branches.length>0?<span className="nav-count">{state.saved.length+state.branches.length}</span>:null}</button>
    </SidebarContent><SidebarFooter><DropdownMenu><DropdownMenuTrigger asChild><button className="profile" aria-label="Account menu"><span className="avatar">L</span><div>Learner</div><ChevronsUpDown size={15}/></button></DropdownMenuTrigger><DropdownMenuContent side="top" align="start" sideOffset={8} className="w-[224px] learner-menu"><DropdownMenuLabel><div className="flex items-center gap-2.5"><span className="avatar">L</span><div className="grid gap-0.5"><strong className="text-sm font-semibold leading-none">Learner</strong><small className="text-xs text-muted-foreground">Free · On this device</small></div></div></DropdownMenuLabel><DropdownMenuSeparator /><DropdownMenuItem onSelect={()=>openSession(null)}><Plus size={15}/>New topic<DropdownMenuShortcut>⌘ K</DropdownMenuShortcut></DropdownMenuItem><DropdownMenuItem onSelect={()=>{setSettingsCategory('general');setView('settings');setBranchId(null);}}><Settings size={15}/>Settings<DropdownMenuShortcut>Ctrl+,</DropdownMenuShortcut></DropdownMenuItem><DropdownMenuItem onSelect={()=>{setSettingsCategory('about');setView('settings');setBranchId(null);}}><CircleHelp size={15}/>About Open Learn</DropdownMenuItem></DropdownMenuContent></DropdownMenu></SidebarFooter></Sidebar>
-   <WorkspaceSplit quizSessionId={quizContext?.sessionId} quizConceptId={quizContext?.conceptId} hidePanel={view==='notes'}><main className={'workspace '+(branch?'with-branch':'')}><header className="topbar"><div><SidebarTrigger/><button onClick={()=>{setView('home');setBranchId(null)}}>Workspace</button><ChevronRight size={13}/><strong>{view==='topic'?currentMap.title:view==='saved'?'Saved explorations':view==='maps'?'Knowledge maps':view==='quiz'?'Quiz':view==='notes'?'Notes':'Learn'}</strong></div></header>
-   <div className="chat-view" hidden={view!=='home'}><LearnChat key={learnVersion} onQuiz={(sessionId,conceptId)=>{setQuizContext({sessionId,conceptId});setView('quiz')}} /></div>
+   <WorkspaceSplit quizSessionId={quizContext?.sessionId} quizConceptId={quizContext?.conceptId} hidePanel={view==='notes'||view==='review'}><main className={'workspace '+(branch?'with-branch':'')}><header className="topbar"><div><SidebarTrigger/><button onClick={()=>{setView('home');setBranchId(null)}}>Workspace</button><ChevronRight size={13}/><strong>{view==='topic'?currentMap.title:view==='saved'?'Saved explorations':view==='maps'?'Knowledge maps':view==='quiz'?'Quiz':view==='notes'?'Notes':view==='review'?'Review':'Learn'}</strong></div></header>
+   {reviewReturnBanner?<div className="toast-message" role="status"><RotateCcw size={16}/>Return to your review when you are ready.<button type="button" onClick={()=>{setReviewContext({sessionId:reviewReturnBanner});setView('review');setReviewReturnBanner(null);}}>Return to Review</button><button onClick={()=>setReviewReturnBanner(null)} aria-label="Dismiss"><X size={14}/></button></div>:null}
+   <div className="chat-view" hidden={view!=='home'}><LearnChat key={learnVersion} initialPrompt={askTutorPrompt||undefined} onInitialPromptConsumed={()=>setAskTutorPrompt(null)} onQuiz={(sessionId,conceptId)=>{setQuizContext({sessionId,conceptId});setView('quiz')}} onReview={(sessionId,conceptId)=>{setReviewContext({sessionId,conceptId});setView('review')}} /></div>
    {view==='notes'?<div className="notes-view"><NotesWorkspace onUseInChat={()=>setView('home')} /></div>:null}
   {view==='quiz' ? <QuizWorkspace sessionId={quizContext?.sessionId} conceptId={quizContext?.conceptId} onReturn={()=>setView('home')} /> : null}
+  {view==='review' ? <ReviewWorkspace resumeSessionId={reviewContext?.sessionId} focusConceptId={reviewContext?.conceptId} onDone={()=>setView('home')} onStartLearning={()=>setView('home')} /> : null}
   {view==='maps'?<div className="library-content"><div className="eyebrow">YOUR SPACE</div><h1>Knowledge maps</h1><p className="intro">A growing collection of connected ideas.</p><div className="search-field"><Search size={16}/><input aria-label="Search maps" placeholder="Find a map…" value={query} onChange={e=>setQuery(e.target.value)}/></div><div className="map-cards">{maps.filter(m=>m.title.toLowerCase().includes(query.toLowerCase())).map(m=><button className="map-card" key={m.id} onClick={()=>openMap(m.id)}><MiniMap index={maps.indexOf(m)}/><div className="map-card-body"><small>SAMPLE MAP</small><h3>{m.title}<ArrowUpRight size={16}/></h3><p>{m.description}</p></div></button>)}</div>{!maps.some(m=>m.title.toLowerCase().includes(query.toLowerCase()))?<div className="empty-state"><Search size={24}/><h2>No matching maps</h2><p>Try “systems”, “light”, or “calculus”.</p><Button variant="outline" onClick={()=>setQuery('')}>Clear search</Button></div>:null}{state.ideas.length>0?<section className="ideas"><h2>Ideas for later</h2><p>Saved on this device. Live map generation is not connected yet.</p>{state.ideas.map(t=><div key={t}><Sparkles size={15}/>{t}</div>)}</section>:null}</div>:null}
   {view==='saved'?<div className="library-content"><div className="eyebrow">YOUR SPACE</div><h1>Keep the useful parts.</h1><p className="intro">Saved lessons and the questions you followed.</p>{state.saved.length+state.branches.length===0?<div className="empty-state"><Bookmark size={28}/><h2>A little space for your discoveries.</h2><p>Save a lesson or open an exploration. It will be waiting here.</p><Button variant="outline" onClick={()=>setView('maps')}>Explore the maps <ArrowRight size={15}/></Button></div>:<div className="saved-list">{state.saved.map(id=>{const [mi,ci]=id.split(':');const m=maps.find(m=>m.id===mi);const c=m?.concepts.find(c=>c.id===ci);return c&&m?<button key={id} onClick={()=>{setState(s=>({...s,mapId:mi,conceptId:ci}));setView('topic');setMode('lesson')}}><Bookmark size={18}/><span><strong>{c.title}</strong><small>{m.title} · Saved lesson</small></span><ChevronRight size={16}/></button>:null})}{state.branches.map(b=><button key={b.id} onClick={()=>{setState(s=>({...s,mapId:b.mapId,conceptId:b.conceptId}));setView('topic');setMode('lesson');setBranchId(b.id)}}><GitBranch size={18}/><span><strong>{b.anchor}</strong><small>{maps.find(m=>m.id===b.mapId)?.title} · {b.mode}</small></span><ChevronRight size={16}/></button>)}</div>}</div>:null}
   {view==='topic'?<div className="topic-workspace"><div className="topic-heading"><div><span className="eyebrow">{currentMap.id.startsWith('generated:')?'LIMITED DRAFT GRAPH':'SAMPLE LEARNING MAP'}</span><h1>{currentMap.title}</h1><p>{currentMap.description}</p></div><button className="source-button" onClick={()=>setSources(true)}><BookOpen size={15}/>{currentMap.id.startsWith('generated:')?'Trust status':'Reading reference'}<ArrowUpRight size={13}/></button></div>

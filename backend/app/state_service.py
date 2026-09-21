@@ -434,13 +434,56 @@ class LearnerStateService:
                  "occurred_at": now, "recorded_at": now})
 
     def _schedule_review(self, connection: Connection, learner_id: str, request: EvidenceCreate, evidence_id: str, now: datetime) -> None:
-        interval = 7 if request.condition.value == "independent" and request.outcome == "correct" else 1
+        from .review.scheduler import SCHEDULER_VERSION, schedule_after_outcome, schedule_initial
+        from .review import memory as memory_store
+        from .review.memory import snapshot_from_memory
+
+        memory_store.ensure_learner(connection, learner_id)
+        existing = memory_store.get_memory(connection, learner_id, request.concept_id)
+        if existing is None:
+            memory_store.seed_memory(
+                connection, learner_id=learner_id, concept_id=request.concept_id,
+                graph_id=request.graph_id, graph_version=request.graph_version,
+            )
+            existing = memory_store.get_memory(connection, learner_id, request.concept_id)
+        confidence = None
+        if isinstance(request.provenance, dict):
+            confidence = request.provenance.get("confidence") or request.provenance.get("learnerConfidence")
+        # Evidence without confidence uses outcome-only scheduling.
+        decision = schedule_after_outcome(
+            outcome=request.outcome,  # type: ignore[arg-type]
+            confidence=confidence,  # type: ignore[arg-type]
+            condition=request.condition.value,  # type: ignore[arg-type]
+            memory=snapshot_from_memory(existing),
+            now=now,
+        ) if request.outcome in {"correct", "partial", "incorrect"} else schedule_initial(now=now)
+        if existing and request.kind == "review" and request.provenance.get("schedulerPendingConfidence"):
+            # Review sessions finalize interval when confidence is submitted.
+            interval = max(1, int(round(decision.interval_days)))
+            due_at = now + __import__("datetime").timedelta(days=interval)
+            reason = "Pending confidence"
+            version = SCHEDULER_VERSION
+        else:
+            if existing:
+                memory_store.apply_schedule_decision(
+                    connection, learner_id=learner_id, concept_id=request.concept_id, decision=decision,
+                    outcome=request.outcome, confidence=confidence, score=request.score,
+                    question_type=(request.provenance or {}).get("questionType"), now=now,
+                )
+            interval = max(1, int(round(decision.interval_days)))
+            due_at = decision.due_at
+            reason = decision.due_reason
+            version = decision.scheduler_version
         connection.execute(text("""
             INSERT INTO review_schedules
-            (id, learner_id, concept_id, originating_evidence_id, due_at, status, interval_days, created_at, updated_at)
-            VALUES (:id, :learner_id, :concept_id, :evidence_id, :due_at, 'scheduled', :interval, :now, :now)
+            (id, learner_id, concept_id, originating_evidence_id, due_at, status, interval_days, created_at, updated_at,
+             due_reason, activity_type, confidence_at_schedule, scheduler_version, priority_score)
+            VALUES (:id, :learner_id, :concept_id, :evidence_id, :due_at, 'scheduled', :interval, :now, :now,
+                    :reason, :activity, :confidence, :version, NULL)
         """), {"id": f"review_{uuid4().hex}", "learner_id": learner_id, "concept_id": request.concept_id,
-                 "evidence_id": evidence_id, "due_at": now + timedelta(days=interval), "interval": interval, "now": now})
+                 "evidence_id": evidence_id, "due_at": due_at, "interval": interval, "now": now,
+                 "reason": reason, "activity": (request.provenance or {}).get("questionType") or request.kind,
+                 "confidence": confidence, "version": version})
 
     def _record_misconception(self, connection: Connection, learner_id: str, request: EvidenceCreate, evidence_id: str, now: datetime) -> None:
         row = connection.execute(text("""

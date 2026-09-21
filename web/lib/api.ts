@@ -809,6 +809,57 @@ export const learningApi = {
   deleteLocalData(learnerId = 'local'): Promise<{ deleted: Record<string, number>; total: number }> {
     return request<{ deleted: Record<string, number>; total: number }>(`/v1/learners/${encodeURIComponent(learnerId)}/data`, { method: 'DELETE' });
   },
+  getReviewDashboard(learnerId = 'local'): Promise<ReviewDashboard> {
+    return request<ReviewDashboard>(`/v1/learners/${encodeURIComponent(learnerId)}/review`, {
+      headers: { 'X-Dev-Learner-Id': learnerId },
+    });
+  },
+  createReviewSession(input: { length?: 'quick' | 'standard' | 'deep'; conceptIds?: string[]; resumeSessionId?: string; optional?: boolean; sessionId?: string }, learnerId = 'local'): Promise<{ sessionId: string }> {
+    return request<{ sessionId: string }>('/v1/review/sessions', {
+      method: 'POST',
+      headers: { 'X-Dev-Learner-Id': learnerId, 'Content-Type': 'application/json' },
+      body: JSON.stringify(input),
+    });
+  },
+  getReviewSession(sessionId: string, learnerId = 'local'): Promise<ReviewSession> {
+    return request<ReviewSession>(`/v1/review/sessions/${encodeURIComponent(sessionId)}`, {
+      headers: { 'X-Dev-Learner-Id': learnerId },
+    });
+  },
+  submitReviewConfidence(sessionId: string, itemId: string, confidence: ReviewConfidence, expectedRevision: number, learnerId = 'local'): Promise<ReviewSession> {
+    return request<ReviewSession>(`/v1/review/sessions/${encodeURIComponent(sessionId)}/items/${encodeURIComponent(itemId)}/confidence`, {
+      method: 'POST', headers: { 'X-Dev-Learner-Id': learnerId, 'Content-Type': 'application/json' },
+      body: JSON.stringify({ confidence, expectedRevision }),
+    });
+  },
+  skipReviewItem(sessionId: string, itemId: string, expectedRevision: number, learnerId = 'local'): Promise<ReviewSession> {
+    return request<ReviewSession>(`/v1/review/sessions/${encodeURIComponent(sessionId)}/items/${encodeURIComponent(itemId)}/skip`, {
+      method: 'POST', headers: { 'X-Dev-Learner-Id': learnerId, 'Content-Type': 'application/json' },
+      body: JSON.stringify({ expectedRevision }),
+    });
+  },
+  remediateReviewItem(sessionId: string, itemId: string, expectedRevision: number, learnerId = 'local'): Promise<ReviewSession> {
+    return request<ReviewSession>(`/v1/review/sessions/${encodeURIComponent(sessionId)}/items/${encodeURIComponent(itemId)}/remediate`, {
+      method: 'POST', headers: { 'X-Dev-Learner-Id': learnerId, 'Content-Type': 'application/json' },
+      body: JSON.stringify({ expectedRevision }),
+    });
+  },
+  completeReviewSession(sessionId: string, expectedRevision: number, learnerId = 'local'): Promise<ReviewSession> {
+    return request<ReviewSession>(`/v1/review/sessions/${encodeURIComponent(sessionId)}/complete`, {
+      method: 'POST', headers: { 'X-Dev-Learner-Id': learnerId, 'Content-Type': 'application/json' },
+      body: JSON.stringify({ expectedRevision }),
+    });
+  },
+  askTutorFromReview(sessionId: string, itemId: string, learnerId = 'local'): Promise<ReviewAskTutorPayload> {
+    return request<ReviewAskTutorPayload>(`/v1/review/sessions/${encodeURIComponent(sessionId)}/items/${encodeURIComponent(itemId)}/ask-tutor`, {
+      method: 'POST', headers: { 'X-Dev-Learner-Id': learnerId },
+    });
+  },
+  backfillReview(learnerId = 'local'): Promise<{ id: string }> {
+    return request<{ id: string }>(`/v1/learners/${encodeURIComponent(learnerId)}/review/backfill`, {
+      method: 'POST', headers: { 'X-Dev-Learner-Id': learnerId, 'Idempotency-Key': crypto.randomUUID() },
+    });
+  },
   createLocalBackup(): Promise<{ format: string; archiveBase64: string }> { return request('/v1/local-backup'); },
   preflightLocalBackup(archiveBase64: string): Promise<{ archiveVersion: number; recordCount: number; fileCount: number; existingRecordCount: number; requiresReplaceConfirmation: boolean }> {
     return request('/v1/local-backup/preflight', { method: 'POST', body: JSON.stringify({ archiveBase64 }) });
@@ -821,3 +872,29 @@ export const learningApi = {
 export type NextActionKind = 'learn' | 'ask' | 'quiz' | 'review';
 export type NextActionRecommendation = { id: string; actionKind: NextActionKind; title: string; rationale: string; conceptId?: string | null; conceptTitle?: string | null; effortMinutes: number; context: Record<string, string>; score: number };
 export type RecommendationSet = { id: string; sessionId: string; policyVersion: string; createdAt: string; recommendations: NextActionRecommendation[] };
+
+export type ReviewConfidence = 'guessing' | 'somewhat' | 'confident' | 'very';
+export type ReviewDashboardConcept = {
+  conceptId: string; title: string; reason: string; masteryEstimate: string;
+  lastReviewedAt?: string | null; nextReviewAt?: string | null; sourceLessonId?: string | null; sourceLessonTitle?: string | null;
+};
+export type ReviewDashboard = {
+  dueCount: number; weakCount: number; newCount: number; totalConcepts: number; estimatedMinutes: number;
+  streakDays: number; preparing: boolean; unfinishedSessionId?: string | null;
+  needsAttention: ReviewDashboardConcept[]; recentlyStrengthened: ReviewDashboardConcept[]; recentlyLearned: ReviewDashboardConcept[];
+  empty: boolean; caughtUp: boolean;
+};
+export type ReviewItem = {
+  id: string; conceptId: string; conceptTitle: string; questionType: string; prompt: string;
+  options: { id: string; label: string }[]; status: string; dueReason?: string | null;
+  sourceLessonId?: string | null; attempt?: Record<string, unknown> | null; remediation?: { heading: string; body: string; followUpPrompt?: string } | null;
+};
+export type ReviewSession = {
+  id: string; status: string; length: string; revision: number; itemCount: number; currentIndex: number;
+  estimatedMinutes: number; items: ReviewItem[]; summary?: {
+    reviewed: number; strengthened: string[]; improving: string[]; needsPractice: string[]; message?: string;
+  } | null; createdAt: string; updatedAt: string;
+};
+export type ReviewAskTutorPayload = {
+  sessionId?: string | null; prompt: string; context: Record<string, unknown>; returnReviewSessionId: string;
+};

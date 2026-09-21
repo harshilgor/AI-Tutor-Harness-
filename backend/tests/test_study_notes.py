@@ -103,7 +103,7 @@ def test_study_note_link_and_insight_roundtrip(tmp_path):
     assert service.find_note("study_alice", "session_link") is None
     note = service.get_or_create_note("study_alice", "session_link")
     assert note.frontmatter["session_ids"] == ["session_link"]
-    assert service.tutor_updates_mode(note) == "ask"
+    assert service.tutor_updates_mode(note) == "auto"
     assert service.get_or_create_note("study_alice", "session_link").id == note.id
     saved = service.save_insight("study_alice", "session_link", "My take", "Light is food.")
     assert "## My take" in service.notes.get("study_alice", note.id).body
@@ -120,6 +120,8 @@ def test_turn_proposal_prepare_commit_accept(tmp_path):
     _make_journey(store, "study_alice", "session_turn")
     service = _service(store)
     note = service.get_or_create_note("study_alice", "session_turn")
+    service.set_tutor_updates("study_alice", note.id, "ask", note.revision)
+    note = service.notes.get("study_alice", note.id)
     prepared = service.prepare("study_alice", "session_turn", ProposalCreate(origin="turn"))
     with store.transaction() as conn:
         result = service.commit(conn, "study_alice", prepared)
@@ -141,12 +143,53 @@ def test_turn_proposal_prepare_commit_accept(tmp_path):
         assert exc.status_code == 409
 
 
+def test_turn_synthesis_can_skip_and_refine(tmp_path):
+    store = _make_store(tmp_path)
+    _make_session(store, "study_alice", "session_refine")
+    _make_journey(store, "study_alice", "session_refine", questions=("What is chlorophyll?", "Why does it look green?"))
+    # First turn adds a section.
+    service = StudyNoteService(store, StubProvider({
+        "action": "add", "heading": "Chlorophyll", "body": "Absorbs light.", "concept_title": None,
+    }))
+    note = service.get_or_create_note("study_alice", "session_refine")
+    prepared = service.prepare("study_alice", "session_refine", ProposalCreate(origin="turn", turn_index=0))
+    with store.transaction() as conn:
+        first = service.commit(conn, "study_alice", prepared)
+    assert first["status"] == "applied" and first["applyKind"] == "added"
+    assert "## Chlorophyll" in service.notes.get("study_alice", note.id).body
+    # Shallow follow-up is skipped.
+    service.provider = StubProvider({"action": "skip", "heading": "", "body": ""})
+    skipped = service.prepare("study_alice", "session_refine", ProposalCreate(origin="turn", turn_index=1))
+    assert skipped.get("skipped") == "no_durable_content"
+    with store.transaction() as conn:
+        skip_result = service.commit(conn, "study_alice", skipped)
+    assert skip_result["status"] == "skipped"
+    # Deeper follow-up refines the existing section in place.
+    service.provider = StubProvider({
+        "action": "refine", "heading": "Chlorophyll", "match_heading": "Chlorophyll",
+        "body": "Absorbs red and blue light; green is reflected.", "concept_title": None,
+    })
+    note = service.notes.get("study_alice", note.id)
+    prepared2 = service.prepare("study_alice", "session_refine",
+                                ProposalCreate(origin="turn", turn_index=1, expected_note_revision=note.revision))
+    assert prepared2["proposal"].section_id is not None
+    with store.transaction() as conn:
+        refined = service.commit(conn, "study_alice", prepared2)
+    assert refined["status"] == "applied" and refined["applyKind"] == "refined"
+    body = service.notes.get("study_alice", note.id).body
+    assert body.count("## Chlorophyll") == 1
+    assert "green is reflected" in body
+    assert "Absorbs light." not in body
+
+
 def test_tombstone_blocks_readd(tmp_path):
     store = _make_store(tmp_path)
     _make_session(store, "study_alice", "session_tomb")
     _make_journey(store, "study_alice", "session_tomb")
     service = _service(store)
     note = service.get_or_create_note("study_alice", "session_tomb")
+    service.set_tutor_updates("study_alice", note.id, "ask", note.revision)
+    note = service.notes.get("study_alice", note.id)
     prepared = service.prepare("study_alice", "session_tomb", ProposalCreate(origin="turn"))
     with store.transaction() as conn:
         service.commit(conn, "study_alice", prepared)
@@ -178,6 +221,7 @@ def test_auto_mode_applies_without_accept(tmp_path):
     _make_journey(store, "study_alice", "session_auto")
     service = _service(store)
     note = service.get_or_create_note("study_alice", "session_auto")
+    # Default is already auto; keep the explicit set for clarity.
     service.set_tutor_updates("study_alice", note.id, "auto", note.revision)
     prepared = service.prepare("study_alice", "session_auto", ProposalCreate(origin="turn"))
     with store.transaction() as conn:
@@ -193,6 +237,8 @@ def test_user_edit_flips_section_to_shared(tmp_path):
     _make_journey(store, "study_alice", "session_shared")
     service = _service(store)
     note = service.get_or_create_note("study_alice", "session_shared")
+    service.set_tutor_updates("study_alice", note.id, "ask", note.revision)
+    note = service.notes.get("study_alice", note.id)
     prepared = service.prepare("study_alice", "session_shared", ProposalCreate(origin="turn"))
     with store.transaction() as conn:
         service.commit(conn, "study_alice", prepared)
@@ -290,6 +336,8 @@ def test_insight_proposal_distills_branch_text(tmp_path):
     _make_session(store, "study_alice", "session_branch")
     service = _service(store)
     note = service.get_or_create_note("study_alice", "session_branch")
+    service.set_tutor_updates("study_alice", note.id, "ask", note.revision)
+    note = service.notes.get("study_alice", note.id)
     prepared = service.prepare("study_alice", "session_branch", ProposalCreate(
         origin="insight", source_text="Why do we need Query? It represents what the token looks for.",
         source_label="Attention exploration"))
@@ -342,6 +390,8 @@ def test_quiz_origin_builds_review_checklist(tmp_path):
     _make_session(store, "study_alice", "session_quiz")
     service = _service(store)
     note = service.get_or_create_note("study_alice", "session_quiz")
+    service.set_tutor_updates("study_alice", note.id, "ask", note.revision)
+    note = service.notes.get("study_alice", note.id)
     with store.transaction() as conn:
         service.records.put(conn, "study_alice", "attempt",
                             {"id": "attempt_weak", "conceptId": "concept_a", "score": 0.2,
@@ -361,3 +411,19 @@ def test_quiz_origin_builds_review_checklist(tmp_path):
     accepted = service.accept("study_alice", proposals[0]["id"], expected_revision=note.revision)
     assert accepted["status"] == "applied"
     assert "Chlorophyll" in service.notes.get("study_alice", note.id).body
+
+
+def test_never_mode_skips_synthesis(tmp_path):
+    store = _make_store(tmp_path)
+    _make_session(store, "study_alice", "session_never")
+    _make_journey(store, "study_alice", "session_never")
+    service = _service(store)
+    note = service.get_or_create_note("study_alice", "session_never")
+    service.set_tutor_updates("study_alice", note.id, "never", note.revision)
+    prepared = service.prepare("study_alice", "session_never", ProposalCreate(origin="turn"))
+    assert prepared.get("skipped") == "tutor_updates_never"
+    with store.transaction() as conn:
+        result = service.commit(conn, "study_alice", prepared)
+    assert result["status"] == "skipped"
+    assert service.list_proposals("study_alice", "session_never") == []
+    assert "## Chlorophyll" not in service.notes.get("study_alice", note.id).body

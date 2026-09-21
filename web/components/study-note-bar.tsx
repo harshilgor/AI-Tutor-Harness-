@@ -39,7 +39,7 @@ export function StudyNoteBar({ draft, onChanged }: {
     <div className={styles.studyBar} aria-label="Study note provenance">
       <BookOpenCheck size={15} />
       <span className={styles.studyBarText}>
-        Study note{mode === 'auto' ? ' · tutor adds sections automatically' : mode === 'never' ? ' · tutor never edits' : ' · tutor proposes additions'}
+        Study note{mode === 'auto' ? ' · grows automatically as you learn' : mode === 'never' ? ' · tutor never edits' : ' · tutor proposes additions'}
       </span>
       {sessions.length > 0 ? (
         <button type="button" className={styles.studyBarLink} onClick={() => openChatSession(sessions[0])}>

@@ -48,3 +48,23 @@ export function openWorkspaceSource(input: { spanId: string; versionId?: string;
 export function openChatSession(sessionId: string): void {
   window.dispatchEvent(new CustomEvent<string>(CHAT_SESSION_OPEN_EVENT, { detail: sessionId }));
 }
+
+export const REVIEW_OPEN_EVENT = 'forma:review-open';
+export const REVIEW_RETURN_EVENT = 'forma:review-return';
+export const REVIEW_ASK_TUTOR_EVENT = 'forma:review-ask-tutor';
+
+export type ReviewOpenDetail = { sessionId?: string; conceptId?: string };
+export type ReviewAskTutorDetail = {
+  prompt: string;
+  context: Record<string, unknown>;
+  returnReviewSessionId: string;
+  chatSessionId?: string | null;
+};
+
+export function openReview(detail: ReviewOpenDetail = {}): void {
+  window.dispatchEvent(new CustomEvent<ReviewOpenDetail>(REVIEW_OPEN_EVENT, { detail }));
+}
+
+export function returnToReview(sessionId: string): void {
+  window.dispatchEvent(new CustomEvent<string>(REVIEW_RETURN_EVENT, { detail: sessionId }));
+}

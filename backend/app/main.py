@@ -59,6 +59,7 @@ from .recommendation_routes import build_recommendation_router
 from .backup_routes import build_backup_router
 from .study_note_routes import build_study_note_router
 from .usage_routes import build_usage_router
+from .review_routes import build_review_router
 
 app = FastAPI(title="AI Tutor Harness API", version="0.1.0")
 local_web_origin = os.getenv("FORMA_WEB_ORIGIN", "http://127.0.0.1:3000")
@@ -103,6 +104,7 @@ app.include_router(build_recommendation_router(get_store))
 app.include_router(build_backup_router(get_store))
 app.include_router(build_study_note_router(get_store, lambda: lesson_provider))
 app.include_router(build_usage_router(get_store))
+app.include_router(build_review_router(get_store, lambda: lesson_provider))
 
 
 @app.get("/health")
