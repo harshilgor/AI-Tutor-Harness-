@@ -40,6 +40,72 @@ class ImageInput:
     title: str
 
 
+@dataclass(frozen=True)
+class ProviderUsage:
+    """Normalized provider-reported usage. Frontend never sees provider shapes."""
+
+    prompt_tokens: int
+    completion_tokens: int
+    total_tokens: int
+    cost: float | None = None
+
+
+def _safe_int(value: object) -> int | None:
+    if isinstance(value, bool):
+        return None
+    if isinstance(value, int) and value >= 0:
+        return value
+    if isinstance(value, float) and value.is_integer() and value >= 0:
+        return int(value)
+    return None
+
+
+def _safe_cost(value: object) -> float | None:
+    if isinstance(value, bool):
+        return None
+    if isinstance(value, (int, float)) and value >= 0:
+        return float(value)
+    return None
+
+
+def normalize_usage(raw: object, *, is_openai: bool) -> ProviderUsage | None:
+    """Parse a provider `usage` payload into normalized form. Returns None when absent/invalid."""
+    if not isinstance(raw, dict):
+        return None
+    if is_openai:
+        prompt = _safe_int(raw.get("input_tokens"))
+        completion = _safe_int(raw.get("output_tokens"))
+        total = _safe_int(raw.get("total_tokens"))
+    else:
+        prompt = _safe_int(raw.get("prompt_tokens"))
+        completion = _safe_int(raw.get("completion_tokens"))
+        total = _safe_int(raw.get("total_tokens"))
+    cost = _safe_cost(raw.get("cost"))
+    if prompt is None and completion is None and total is None:
+        return None
+    prompt = prompt if prompt is not None else 0
+    completion = completion if completion is not None else 0
+    if total is None:
+        total = prompt + completion
+    return ProviderUsage(prompt_tokens=prompt, completion_tokens=completion, total_tokens=total, cost=cost)
+
+
+def usage_metrics(usage: ProviderUsage | None, *, provider: str) -> dict[str, object]:
+    """Normalized metrics fragment stored alongside generation metrics."""
+    if usage is None:
+        return {}
+    metrics: dict[str, object] = {
+        "promptTokens": usage.prompt_tokens,
+        "completionTokens": usage.completion_tokens,
+        "totalTokens": usage.total_tokens,
+        "usageSource": "exact",
+        "usageProvider": provider,
+    }
+    if usage.cost is not None:
+        metrics["providerCost"] = usage.cost
+    return metrics
+
+
 class LessonProvider(Protocol):
     provider_name: str
 
@@ -69,6 +135,7 @@ class OpenRouterLessonProvider:
         self.app_name = app_name
         self.provider_name = f"openrouter/{model}"
         self.base_url = self.endpoint
+        self.last_usage: ProviderUsage | None = None
 
     @classmethod
     def openai(cls, api_key: str, model: str) -> "OpenRouterLessonProvider":
@@ -157,6 +224,13 @@ Use 1-3 blocks. The only permitted kind values are explanation and example. Do n
             response = httpx.post(self.base_url, headers=headers, json=payload, timeout=150)
             response.raise_for_status()
             response_data = response.json()
+            is_openai = bool(getattr(self, "is_openai", False))
+            # Capture exact provider usage; absence leaves last_usage as None and
+            # callers fall back to estimates. Never raises on malformed usage.
+            try:
+                self.last_usage = normalize_usage(response_data.get("usage"), is_openai=is_openai)
+            except Exception:
+                self.last_usage = None
             if response_data.get("status") == "incomplete":
                 raise ModelProviderError("The explanation exceeded the response limit. Please try a shorter passage.")
             def collect_text(value: object) -> list[str]:
@@ -227,7 +301,11 @@ Use 1-3 blocks. The only permitted kind values are explanation and example. Do n
         return parsed
 
     async def stream_text(self, prompt: str, max_tokens: int = 4000, *, images: list[ImageInput] | None = None) -> AsyncIterator[str]:
-        """Yield provider text only; OpenAI/OpenRouter SSE stays at this boundary."""
+        """Yield provider text only; OpenAI/OpenRouter SSE stays at this boundary.
+
+        Exact usage from the terminal SSE event is captured on ``self.last_usage``
+        once the stream is fully consumed. Callers read it after iteration.
+        """
         headers = {"Authorization": f"Bearer {self.api_key}", "Content-Type": "application/json"}
         if self.site_url:
             headers["HTTP-Referer"] = self.site_url
@@ -235,6 +313,9 @@ Use 1-3 blocks. The only permitted kind values are explanation and example. Do n
             headers["X-Title"] = self.app_name
         payload = self.streaming_payload(prompt, max_tokens, images)
         images = images or []
+        is_openai = bool(getattr(self, "is_openai", False))
+        stream_usage: ProviderUsage | None = None
+        self.last_usage = None
         try:
             async with httpx.AsyncClient(timeout=httpx.Timeout(180.0, connect=20.0)) as client:
                 async with client.stream("POST", self.base_url, headers=headers, json=payload) as response:
@@ -249,6 +330,23 @@ Use 1-3 blocks. The only permitted kind values are explanation and example. Do n
                             event = json.loads(data)
                         except json.JSONDecodeError as exc:
                             raise ModelProviderError("The model sent an unreadable stream event.") from exc
+                        # Capture exact usage without disturbing text flow. OpenRouter
+                        # attaches `usage` to the final chunk; OpenAI Responses nests
+                        # it under response.completed -> response.usage.
+                        try:
+                            candidate: object = None
+                            if isinstance(event, dict):
+                                if isinstance(event.get("usage"), dict):
+                                    candidate = event.get("usage")
+                                elif event.get("type") == "response.completed":
+                                    nested = event.get("response")
+                                    if isinstance(nested, dict) and isinstance(nested.get("usage"), dict):
+                                        candidate = nested.get("usage")
+                            parsed = normalize_usage(candidate, is_openai=is_openai) if candidate is not None else None
+                            if parsed is not None:
+                                stream_usage = parsed
+                        except Exception:
+                            pass
                         if event.get("type") in {"error", "response.failed", "response.incomplete"}:
                             raise ModelProviderError("The model stream ended before the lesson was complete.")
                         delta = ""
@@ -258,6 +356,7 @@ Use 1-3 blocks. The only permitted kind values are explanation and example. Do n
                             delta = (event["choices"][0].get("delta") or {}).get("content") or ""
                         if isinstance(delta, str) and delta:
                             yield delta
+            self.last_usage = stream_usage
         except httpx.TimeoutException as exc:
             raise ModelProviderError("PROVIDER_TIMEOUT") from exc
         except httpx.HTTPStatusError as exc:

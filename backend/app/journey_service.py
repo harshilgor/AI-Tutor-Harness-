@@ -133,6 +133,9 @@ class JourneyService:
     def commit(self, conn, owner, journey):
         self.records.put(conn, owner, "journey", {**journey, "persisted": True}, journey["sessionId"],
                          expected=journey["revision"] if journey.get("persisted", True) else None)
+        turns = journey.get("turns") or []
+        first_question = turns[0].get("question") if turns else None
+        self.store.touch_session_in(conn, journey["sessionId"], owner, first_question=first_question)
         return {"sessionId": journey["sessionId"]}
 
     def prepare_stream(self, owner, sid, command: JourneyCommand):

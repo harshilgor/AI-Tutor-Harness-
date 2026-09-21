@@ -1,8 +1,8 @@
 "use client";
 
 import { useEffect, useRef, useState } from 'react';
-import { motion, useReducedMotion } from 'motion/react';
-import { LoaderCircle, Plus, FileText } from 'lucide-react';
+import { AnimatePresence, motion, useReducedMotion } from 'motion/react';
+import { LoaderCircle, Plus, FileText, BookOpen } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { learningApi, type Gear, type LessonArtifact, type WorkspaceNoteSummary, type NoteDraft } from '@/lib/api';
 import styles from './learn-chat.module.css';
@@ -14,6 +14,7 @@ import { getJourney, workflow, waitForJob, type ChatMode, type Journey } from '@
 import { GenerationStream, type GenerationDescriptor, type GenerationEvent } from '@/lib/generation-stream';
 import { QuizWorkspace } from './quiz-workspace';
 import { NoteDraftCard } from './note-draft-card';
+import { NoteProposalList, StudyNoteBanner } from './study-note-panel';
 import { NextActionCards } from './next-action-cards';
 import { openWorkspaceNote, openWorkspaceNoteDraft, openWorkspaceSource, WORKSPACE_NOTE_MENTION_EVENT, WORKSPACE_NOTE_REPLACE_DRAFT_EVENT, type WorkspaceNoteMention } from '@/lib/workspace-events';
 
@@ -25,6 +26,39 @@ type Turn = { question: string; lesson?: LessonArtifact; answer?: MaterialAnswer
 type SelectedPassage = { blockId: string; selectedText: string; lessonId?: string; sessionId?: string };
 type SelectionPanel = { selection: SelectedPassage; blocks: StreamedBlock[]; status: 'preparing' | 'streaming' | 'completed' | 'error'; error?: string };
 type GenerationRecovery = { generationId: string; sessionId: string; mode: ChatMode; lastAppliedSequence: number; status: string };
+
+const GREETINGS = [
+  'Hi, what do you want to learn today?',
+  'What are you curious about right now?',
+  'Drop in a book, or ask anything…',
+  'What idea should we unpack next?',
+  'Where should we start exploring?',
+];
+
+function RotatingGreeting() {
+  const reduceMotion = useReducedMotion();
+  const [index, setIndex] = useState(0);
+  useEffect(() => {
+    if (reduceMotion) return;
+    const timer = window.setInterval(() => setIndex(i => (i + 1) % GREETINGS.length), 3500);
+    return () => window.clearInterval(timer);
+  }, [reduceMotion]);
+  return (
+    <p className={styles.greeting} aria-live="polite">
+      <AnimatePresence mode="wait" initial={false}>
+        <motion.span
+          key={index}
+          initial={reduceMotion ? false : { opacity: 0, y: 6 }}
+          animate={{ opacity: 1, y: 0 }}
+          exit={reduceMotion ? undefined : { opacity: 0, y: -6 }}
+          transition={{ duration: 0.35, ease: 'easeOut' }}
+        >
+          {GREETINGS[index]}
+        </motion.span>
+      </AnimatePresence>
+    </p>
+  );
+}
 
 export function LearnChat({ onQuiz }: { onQuiz?: (sessionId: string, conceptId?: string) => void }) {
   const reduceMotion = useReducedMotion();
@@ -47,6 +81,7 @@ export function LearnChat({ onQuiz }: { onQuiz?: (sessionId: string, conceptId?:
   const [selection, setSelection] = useState<SelectedPassage | null>(null);
   const [selectionPanel, setSelectionPanel] = useState<SelectionPanel | null>(null);
   const [selectionFollowup, setSelectionFollowup] = useState('');
+  const [proposalsKey, setProposalsKey] = useState(0);
   const scrollArea = useRef<HTMLDivElement | null>(null);
   const activeGeneration = useRef<GenerationStream | null>(null);
   const lesson = turns.at(-1)?.lesson || null;
@@ -145,6 +180,40 @@ export function LearnChat({ onQuiz }: { onQuiz?: (sessionId: string, conceptId?:
       const draft = await learningApi.getNoteDraft(result.noteDraftId);
       setNoteDrafts(current => [...current.filter(item => item.id !== draft.id), draft]); setReplacementTarget(null);
     } catch (cause) { setError(cause instanceof Error ? cause.message : 'Could not create a repair note draft.'); }
+    finally { setBusy(false); }
+  }
+  async function proposeTurn(lessonIndex: number) {
+    if (!sessionId || busy) return;
+    setBusy(true); setError(''); setProgress('Distilling this lesson into a note section…');
+    try {
+      const link = await learningApi.getStudyNote(sessionId).catch(() => null);
+      await workflow(`/sessions/${sessionId}/note-proposals`, { origin: 'turn', turnIndex: lessonIndex, expectedNoteRevision: link?.revision ?? null }, `note-proposal:${sessionId}:${lessonIndex}`);
+      setProposalsKey(key => key + 1);
+    } catch (cause) { setError(cause instanceof Error ? cause.message : 'The section could not be proposed.'); }
+    finally { setBusy(false); }
+  }
+  async function saveSelectionInsight() {
+    const sid = selection?.sessionId || sessionId;
+    if (!selection || !sid || busy) return;
+    setBusy(true); setError('');
+    try {
+      await learningApi.saveStudyInsight(sid, { body: selection.selectedText });
+      setSelection(null);
+    } catch (cause) { setError(cause instanceof Error ? cause.message : 'The insight could not be saved.'); }
+    finally { setBusy(false); }
+  }
+  async function proposeInsight(sourceText: string, label: string, sid: string | null) {
+    const target = sid || sessionId;
+    if (!target || busy || !sourceText.trim()) return;
+    setBusy(true); setError(''); setProgress('Distilling this insight for your note…');
+    try {
+      const link = await learningApi.getStudyNote(target).catch(() => null);
+      await workflow(`/sessions/${target}/note-proposals`, {
+        origin: 'insight', sourceText: sourceText.slice(0, 4000), sourceLabel: label.slice(0, 200),
+        expectedNoteRevision: link?.revision ?? null,
+      }, `note-proposal:insight:${target}:${crypto.randomUUID()}`);
+      setProposalsKey(key => key + 1);
+    } catch (cause) { setError(cause instanceof Error ? cause.message : 'The insight could not be proposed.'); }
     finally { setBusy(false); }
   }
   async function journeyAction(action: string) {
@@ -260,6 +329,12 @@ export function LearnChat({ onQuiz }: { onQuiz?: (sessionId: string, conceptId?:
       const currentSession = sessionId ? { id: sessionId } : await learningApi.createSession({ topic: text.slice(0, 200), goal: text.slice(0, 1000), gear });
       if (!sessionId) setSessionId(currentSession.id);
       try { localStorage.setItem('forma-chat-session', currentSession.id); } catch { /* Session remains server-side. */ }
+      if (!sessionId) window.dispatchEvent(new CustomEvent('forma:chat-history-changed'));
+      if (!sessionId && chatMode === 'learn') {
+        // The living note belongs to the Learn session from the start, even
+        // before anything is synthesized. Best-effort: chat works without it.
+        learningApi.createStudyNote(currentSession.id).catch(() => {});
+      }
       const urls = Array.from(new Set(text.match(/https?:\/\/[^\s<>]+/gi) || []));
       for (const link of urls) await materialRequest(`/sessions/${currentSession.id}/url-materials`, materialCommand({ url: link }, controller.signal));
       const ready: ChatAttachment[] = [];
@@ -289,12 +364,15 @@ export function LearnChat({ onQuiz }: { onQuiz?: (sessionId: string, conceptId?:
 
   function reset() { setTurns([]); setSessionId(null); setJourney(null); setChecking(false); setPrompt(''); setError(''); setAttachments([]); setNoteMentions([]); setNoteDrafts([]); setReplacementTarget(null); setSelection(null); attachedVersions.current = []; try { localStorage.removeItem('forma-chat-session'); } catch { /* Optional resume pointer. */ } }
 
+  const lessonIndexOf: number[] = (() => { let n = -1; return turns.map(turn => turn.lesson ? (n += 1) : -1); })();
+
   return <div className={styles.chatShell}>
     <div ref={scrollArea} className={styles.chatScroll}>
     <div className={`${styles.page} ${turns.length ? styles.reading : styles.empty}`}>
-    {!turns.length && !busy ? <h1>Hi, what do you want<br className={styles.break} /> to learn today?</h1> : null}
+    {!turns.length && !busy ? <RotatingGreeting /> : null}
     {journey?.steps.length && chatMode === 'learn' ? <section className={styles.journey} aria-label="Learning route"><details open={journey.status === 'proposed'}><summary>Your learning route · {journey.status === 'completed' ? journey.steps.length : journey.position} of {journey.steps.length} steps covered</summary><ol>{journey.steps.map((step, i) => <li key={`${step.conceptId}-${i}`} aria-current={i === journey.position ? 'step' : undefined}><strong>{step.title}</strong><p>{step.objective}</p></li>)}</ol></details><p>Coverage is not mastery. Your answers provide separate evidence.</p><div className={styles.lessonActions}>{journey.status === 'proposed' ? <><Button disabled={busy} onClick={() => void journeyAction('start')}>Start learning</Button><Button variant="outline" disabled={busy} onClick={() => setChecking(true)}>Check my starting point</Button><Button variant="ghost" disabled={busy || !prompt.trim()} onClick={() => void journeyAction('adjust')}>Adjust to my message</Button></> : <><Button disabled={busy || journey.status === 'completed'} onClick={() => void journeyAction(journey.status === 'paused' ? 'resume' : 'next')}>{journey.status === 'paused' ? 'Resume' : 'Continue'}</Button><Button variant="ghost" disabled={busy} onClick={() => void journeyAction('repair')}>I’m not following</Button><Button variant="ghost" disabled={busy} onClick={() => void journeyAction('pause')}>Pause</Button></>}</div></section> : null}
     {busy && !streaming ? <div className={styles.loading} role="status"><LoaderCircle className={styles.spinner} size={22} /><h2>{progress}</h2><p>{prompt}</p><span>A thoughtful answer takes a little time.</span></div> : null}
+    {sessionId && turns.length > 0 ? <StudyNoteBanner sessionId={sessionId} /> : null}
     {turns.map((turn, turnIndex) => <motion.div key={turn.lesson?.id || turn.stream?.id || `material-${turnIndex}`} className={styles.turn} initial={reduceMotion ? false : { opacity: 0, y: 12 }} animate={{ opacity: 1, y: 0 }} transition={{ duration: 0.2, ease: 'easeOut' }}>
       <div className={styles.userPrompt}><span>You</span><div><p>{turn.question}</p>{turn.files?.map(name => <div className={styles.sentFile} key={name}><FileText size={15} />{name}</div>)}</div></div>
       <article aria-label="Learning lesson" className={styles.lessonArticle}>
@@ -303,10 +381,11 @@ export function LearnChat({ onQuiz }: { onQuiz?: (sessionId: string, conceptId?:
           onSelect={(block, raw) => setSelection({ blockId: block.id, selectedText: raw.slice(0, 1200), lessonId: turn.lesson?.id, sessionId: turn.sessionId })} />
         {turn.answer && <><p className={styles.hint}>{turn.answer.message}</p>{turn.answer.sources.length > 0 && <details className={styles.sources}><summary>{turn.answer.sources.length} passages from your materials</summary><p className={styles.hint}>Coverage is limited to these selected passages.</p>{turn.answer.sources.map(source => <button type="button" className={styles.sourceChip} key={source.spanId} onClick={() => openWorkspaceSource(source)}>{source.title} · Page {source.pageIndex + 1}</button>)}</details>}</>}
         {turn.noteContext?.notes.length ? <div className={styles.noteContextReceipt}><span>Learner note context · {turn.noteContext.totalCharacters} characters</span>{turn.noteContext.notes.map(note => <button type="button" key={note.noteId} onClick={() => openWorkspaceNote(note.noteId)}>@{note.title}</button>)}</div> : null}
-        {turn.lesson ? <div className={styles.lessonActions}><Button variant="ghost" size="sm" disabled={busy} onClick={() => void createLessonDraft(turn.lesson!.id)}><FileText size={14} />{replacementTarget ? `Replace selected section with lesson draft` : `Create note draft`}</Button></div> : null}
+        {turn.lesson ? <div className={styles.lessonActions}><Button variant="ghost" size="sm" disabled={busy} onClick={() => void createLessonDraft(turn.lesson!.id)}><FileText size={14} />{replacementTarget ? `Replace selected section with lesson draft` : `Create note draft`}</Button>{lessonIndexOf[turnIndex] >= 0 ? <Button variant="ghost" size="sm" disabled={busy} onClick={() => void proposeTurn(lessonIndexOf[turnIndex])}><BookOpen size={14} />Add to study note</Button> : null}</div> : null}
         {noteDrafts.filter(draft => draft.sessionId === turn.sessionId).map(draft => <NoteDraftCard key={draft.id} draft={draft} onHandled={updated => setNoteDrafts(current => current.map(item => item.id === updated.id ? updated : item))} />)}
       </article>
     </motion.div>)}
+    {sessionId ? <NoteProposalList sessionId={sessionId} refreshKey={proposalsKey} /> : null}
     {checking && sessionId && <QuizWorkspace key={`${sessionId}:${journey?.position || 0}`} inline sessionId={sessionId} conceptId={journey?.steps[journey.position]?.conceptId || lesson?.conceptId} onReturn={() => setChecking(false)} onCreateRepairNote={attemptId => void createQuizFeedbackDraft(attemptId)} />}
     {sessionId && turns.length > 0 && chatMode === 'learn' ? <NextActionCards sessionId={sessionId} enabled={!busy}
       onLearn={() => journeyAction('next')}
@@ -315,8 +394,8 @@ export function LearnChat({ onQuiz }: { onQuiz?: (sessionId: string, conceptId?:
       onReview={() => setError('A review is not available for this recommendation yet.')} /> : null}    {sessionId && turns.length > 0 && <div className={styles.lessonActions}><Button variant="outline" disabled={busy} onClick={() => setChecking(!checking)}>Check understanding</Button><Button variant="ghost" disabled={busy} onClick={() => onQuiz?.(sessionId, journey?.steps[journey.position]?.conceptId || lesson?.conceptId)}>Quiz this concept</Button></div>}
     {turns.length > 0 && !busy ? <div className={styles.lessonActions}><span className={styles.hint}>AI-generated · Sources have not been independently verified.</span><Button variant="ghost" onClick={reset}><Plus size={15} />New lesson</Button></div> : null}
     {error ? <p className={styles.error} role="alert">{error}</p> : null}
-    {selection ? <div className={styles.selection}><Button onClick={() => void explainSelection(selection)}>Explain selection</Button><Button variant="outline" onClick={() => { openWorkspaceNoteDraft({ title: 'Lesson note', body: `> ${selection.selectedText.replace(/\n/g, '\n> ')}\n\n`, frontmatter: { lesson_id: selection.lessonId || null, block_id: selection.blockId, session_id: selection.sessionId || null, source: 'lesson_selection' } }); setSelection(null); }}>Save to notes</Button><Button variant="ghost" onClick={() => setSelection(null)}>Dismiss</Button></div> : null}
-    {selectionPanel ? <aside className={styles.studyPanel} aria-label="Selected passage explanation"><div className={styles.panelHeader}><div><span>Selected passage</span><strong>A closer look</strong></div><Button variant="ghost" size="sm" onClick={() => setSelectionPanel(null)}>Close</Button></div><blockquote>{selectionPanel.selection.selectedText}</blockquote>{selectionPanel.blocks.map(block => <section key={block.id}><h3>{block.heading}</h3><RichContent body={block.body || '…'} /></section>)}{selectionPanel.status === 'preparing' ? <p className={styles.hint}>Preparing the explanation…</p> : null}{selectionPanel.error ? <p className={styles.error}>{selectionPanel.error}</p> : null}<form onSubmit={event => { event.preventDefault(); const text = selectionFollowup.trim(); if (text) { setSelectionFollowup(''); void explainSelection(selectionPanel.selection, text); } }}><label htmlFor="selection-followup" className="sr-only">Ask a follow-up about this passage</label><textarea id="selection-followup" rows={3} value={selectionFollowup} disabled={busy} placeholder="Ask a follow-up about this passage…" onChange={event => setSelectionFollowup(event.target.value)} /><div className={styles.lessonActions}>{selectionPanel.status === 'streaming' || selectionPanel.status === 'preparing' ? <Button type="button" variant="outline" onClick={() => void activeGeneration.current?.stop()}>Stop</Button> : <span /> }<Button type="submit" disabled={busy || !selectionFollowup.trim()}>Ask</Button></div></form></aside> : null}
+    {selection ? <div className={styles.selection}><Button onClick={() => void explainSelection(selection)}>Explain selection</Button><Button variant="outline" onClick={() => { openWorkspaceNoteDraft({ title: 'Lesson note', body: `> ${selection.selectedText.replace(/\n/g, '\n> ')}\n\n`, frontmatter: { lesson_id: selection.lessonId || null, block_id: selection.blockId, session_id: selection.sessionId || null, source: 'lesson_selection' } }); setSelection(null); }}>Save to notes</Button>{(selection.sessionId || sessionId) ? <Button variant="outline" onClick={() => void saveSelectionInsight()}>Save to study note</Button> : null}<Button variant="ghost" onClick={() => setSelection(null)}>Dismiss</Button></div> : null}
+    {selectionPanel ? <aside className={styles.studyPanel} aria-label="Selected passage explanation"><div className={styles.panelHeader}><div><span>Selected passage</span><strong>A closer look</strong></div><Button variant="ghost" size="sm" onClick={() => setSelectionPanel(null)}>Close</Button></div><blockquote>{selectionPanel.selection.selectedText}</blockquote>{selectionPanel.blocks.map(block => <section key={block.id}><h3>{block.heading}</h3><RichContent body={block.body || '…'} /></section>)}{selectionPanel.status === 'preparing' ? <p className={styles.hint}>Preparing the explanation…</p> : null}{selectionPanel.error ? <p className={styles.error}>{selectionPanel.error}</p> : null}<form onSubmit={event => { event.preventDefault(); const text = selectionFollowup.trim(); if (text) { setSelectionFollowup(''); void explainSelection(selectionPanel.selection, text); } }}><label htmlFor="selection-followup" className="sr-only">Ask a follow-up about this passage</label><textarea id="selection-followup" rows={3} value={selectionFollowup} disabled={busy} placeholder="Ask a follow-up about this passage…" onChange={event => setSelectionFollowup(event.target.value)} /><div className={styles.lessonActions}>{selectionPanel.status === 'streaming' || selectionPanel.status === 'preparing' ? <Button type="button" variant="outline" onClick={() => void activeGeneration.current?.stop()}>Stop</Button> : <span /> }{selectionPanel.blocks.length > 0 ? <Button type="button" variant="outline" disabled={busy} onClick={() => void proposeInsight(selectionPanel.blocks.map(block => `${block.heading}\n${block.body}`).join('\n\n'), selectionPanel.selection.selectedText.slice(0, 120), selectionPanel.selection.sessionId || sessionId)}>Save insight</Button> : null}<Button type="submit" disabled={busy || !selectionFollowup.trim()}>Ask</Button></div></form></aside> : null}
     </div>
     </div>
     <div className={styles.composerDock}><div className={styles.composerInner}><ChatComposer value={prompt} onChange={setPrompt} attachments={attachments} onAttachmentsChange={setAttachments} onSubmit={() => void submit()} onCancel={streaming ? () => void activeGeneration.current?.stop() : undefined} busy={busy} followup={turns.length > 0} gear={gear} onGearChange={setGear} mode={chatMode} onModeChange={setChatMode} noteMentions={noteMentions} onAddNoteMention={note => void addNoteMention(note)} onRemoveNoteMention={noteId => setNoteMentions(current => current.filter(note => note.noteId !== noteId))} onOpenNoteMention={openWorkspaceNote} /></div></div>

@@ -10,6 +10,8 @@ from .quiz_service import QuizService
 from .journey_service import JourneyService
 from .note_draft_models import CreateNoteDraft, NoteDraftReplaceCommand
 from .note_draft_service import NoteDraftService
+from .study_note_models import ProposalCreate
+from .study_note_service import StudyNoteService
 
 
 def run_job(store, provider, job_id):
@@ -19,10 +21,13 @@ def run_job(store, provider, job_id):
         return
     owner, target, payload, kind = job["owner_id"], job["target_id"], job["payload"], job["kind"]
     quiz, journey, drafts = QuizService(store, provider), JourneyService(store, provider), NoteDraftService(store, provider)
+    synthesis = StudyNoteService(store, provider)
     try:
         prepared = None
         if kind == "journey":
             prepared = journey.prepare(owner, target, JourneyCommand.model_validate(payload))
+        elif kind == "note_synthesis":
+            prepared = synthesis.prepare(owner, target, ProposalCreate.model_validate(payload))
         elif kind == "note_draft":
             prepared = drafts.prepare(owner, target, CreateNoteDraft.model_validate(payload))
         elif kind == "next":
@@ -35,6 +40,8 @@ def run_job(store, provider, job_id):
                 result = {"quizId": created["id"]}
             elif kind == "journey":
                 result = journey.commit(conn, owner, prepared)
+            elif kind == "note_synthesis":
+                result = synthesis.commit(conn, owner, prepared)
             elif kind == "note_draft":
                 result = drafts.commit(conn, owner, prepared)
             elif kind == "next":

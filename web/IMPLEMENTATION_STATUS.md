@@ -18,6 +18,10 @@ The Production Learning Kernel is now implemented behind the existing teaching-a
 
 The deterministic provider remains `limited_unverified` and makes no claim of source-backed correctness, model verification, evidence, or calibrated mastery. Lesson reading does not advance the learner projection, failed actions do not advance lesson position, and idempotent retries do not duplicate committed artifacts or evidence.
 
+## Living study notes
+
+Each chat session can own a study note (Markdown vault file with `study_note`, `session_ids`, and `tutor_updates` frontmatter). Tutor synthesis runs as a background `note_synthesis` job and produces accept/edit/reject proposals — never silent rewrites. Section ownership (tutor/user/shared), tombstones, and session linkage live in the `note_section_provenance` sidecar, so the Markdown stays clean. The default mode proposes before writing; per-note `auto`/`never` modes and quiz-origin review checklists are supported.
+
 ## Next engineering slice
 
 1. Add a model-provider abstraction with routing, structured outputs, citations, and real verifier steps behind the current contracts.

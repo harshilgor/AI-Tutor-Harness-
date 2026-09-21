@@ -10,6 +10,7 @@ export const WORKSPACE_NOTE_OPEN_EVENT = 'forma:workspace-note-open';
 export const WORKSPACE_NOTE_MENTION_EVENT = 'forma:workspace-note-mention';
 export const WORKSPACE_NOTE_REPLACE_DRAFT_EVENT = 'forma:workspace-note-replace-draft';
 export const WORKSPACE_SOURCE_OPEN_EVENT = 'forma:workspace-source-open';
+export const CHAT_SESSION_OPEN_EVENT = 'forma:chat-session-open';
 
 export type WorkspaceNoteMention = { noteId: string; title: string; revision: number; startOffset: number; endOffset: number; excerpt: string };
 
@@ -41,4 +42,9 @@ export function createWorkspaceNoteReplacementDraft(input: { noteId: string; tit
 /** Focus a learner-owned material passage without altering the chat thread. */
 export function openWorkspaceSource(input: { spanId: string; versionId?: string; title?: string }): void {
   window.dispatchEvent(new CustomEvent(WORKSPACE_SOURCE_OPEN_EVENT, { detail: input }));
+}
+
+/** Return from a study note to its linked chat session ("how I learned this"). */
+export function openChatSession(sessionId: string): void {
+  window.dispatchEvent(new CustomEvent<string>(CHAT_SESSION_OPEN_EVENT, { detail: sessionId }));
 }

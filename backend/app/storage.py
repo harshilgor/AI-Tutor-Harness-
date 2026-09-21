@@ -7,6 +7,7 @@ commit canonical state, evidence, and audit events atomically.
 
 from __future__ import annotations
 
+import json
 from collections.abc import Iterator
 from contextlib import contextmanager
 from pathlib import Path
@@ -15,9 +16,9 @@ from typing import Any
 from sqlalchemy import Connection, Engine, text
 
 from .database import create_database_engine, run_migrations
-from .models import GraphJob, GraphVersion, TopicScope
+from .models import GraphJob, GraphVersion, TopicScope, utc_now
 from .policy_models import PolicyValidationResult, TeachingPlan
-from .session_models import ActionEvent, LearningSession, LessonArtifact, RunStatus
+from .session_models import ActionEvent, LearningSession, LessonArtifact, RunStatus, short_title
 
 
 class Store:
@@ -100,6 +101,115 @@ class Store:
         with self.engine.connect() as connection:
             row = connection.execute(text("SELECT payload FROM learning_sessions WHERE id = :id"), {"id": session_id}).mappings().first()
         return LearningSession.model_validate_json(row["payload"]) if row else None
+
+    def list_sessions(self, owner: str, limit: int = 50, offset: int = 0) -> tuple[list[LearningSession], int]:
+        """Newest-first conversation metadata for one learner. Payloads are parsed
+        but only session-level fields are returned by the history endpoint."""
+        with self.engine.connect() as connection:
+            total = connection.execute(
+                text("SELECT COUNT(*) FROM learning_sessions WHERE learner_id = :owner"), {"owner": owner}
+            ).scalar_one()
+            rows = connection.execute(
+                text("SELECT payload FROM learning_sessions WHERE learner_id = :owner "
+                     "ORDER BY updated_at DESC NULLS LAST LIMIT :limit OFFSET :offset"),
+                {"owner": owner, "limit": limit, "offset": offset},
+            ).mappings().all()
+        return ([LearningSession.model_validate_json(row["payload"]) for row in rows], int(total))
+
+    def journey_turn_count(self, owner: str, session_id: str) -> int:
+        with self.engine.connect() as connection:
+            row = connection.execute(
+                text("SELECT payload FROM practice_records WHERE id = :id AND owner_id = :owner"),
+                {"id": f"journey_{session_id}", "owner": owner},
+            ).mappings().first()
+        if row is None:
+            return 0
+        try:
+            return len(json.loads(row["payload"]).get("turns", []))
+        except (ValueError, AttributeError):
+            return 0
+
+    def rename_session(self, session_id: str, owner: str, title: str) -> LearningSession | None:
+        session = self.get_session(session_id)
+        if session is None or session.learner_id != owner:
+            return None
+        updated = session.model_copy(update={"title": title, "updated_at": utc_now()})
+        self.save_session(updated)
+        return updated
+
+    def touch_session_in(self, connection: Connection, session_id: str, owner: str, first_question: str | None = None) -> None:
+        """Refresh recency (and backfill a missing title) inside the caller's transaction."""
+        row = connection.execute(
+            text("SELECT payload FROM learning_sessions WHERE id = :id"), {"id": session_id}
+        ).mappings().first()
+        if row is None:
+            return
+        session = LearningSession.model_validate_json(row["payload"])
+        if session.learner_id != owner:
+            return
+        update: dict[str, Any] = {"updated_at": utc_now()}
+        if not (session.title or "").strip() and (first_question or "").strip():
+            update["title"] = short_title(first_question)
+        updated = session.model_copy(update=update)
+        connection.execute(
+            text("UPDATE learning_sessions SET payload = :payload, updated_at = :updated_at WHERE id = :id"),
+            {"id": session_id, "payload": updated.model_dump_json(), "updated_at": updated.updated_at},
+        )
+
+    def delete_session(self, session_id: str, owner: str) -> bool:
+        """Remove a conversation and everything scoped to it.
+
+        Quizzes are deliberately preserved: they own assessment evidence with an
+        independent lifecycle and remain readable without their source session.
+        Learning jobs are left to fail safe on their next poll.
+        """
+        session = self.get_session(session_id)
+        if session is None or session.learner_id != owner:
+            return False
+        journey_id = f"journey_{session_id}"
+        with self.transaction() as connection:
+            action_ids = connection.execute(
+                text("SELECT id FROM learning_actions WHERE session_id = :sid"), {"sid": session_id}
+            ).scalars().all()
+            for action_id in action_ids:
+                connection.execute(text("DELETE FROM action_events WHERE action_id = :id"), {"id": action_id})
+            connection.execute(text("DELETE FROM learning_actions WHERE session_id = :sid"), {"sid": session_id})
+            connection.execute(text("DELETE FROM lesson_artifacts WHERE session_id = :sid"), {"sid": session_id})
+            connection.execute(text("DELETE FROM material_attachments WHERE session_id = :sid"), {"sid": session_id})
+            connection.execute(
+                text("DELETE FROM context_records WHERE session_id = :sid AND owner_id = :owner"),
+                {"sid": session_id, "owner": owner},
+            )
+            connection.execute(
+                text("DELETE FROM generation_records WHERE session_id = :sid AND owner_id = :owner"),
+                {"sid": session_id, "owner": owner},
+            )
+            set_ids = connection.execute(
+                text("SELECT id FROM recommendation_sets WHERE session_id = :sid AND owner_id = :owner"),
+                {"sid": session_id, "owner": owner},
+            ).scalars().all()
+            for set_id in set_ids:
+                rec_ids = connection.execute(
+                    text("SELECT id FROM next_action_recommendations WHERE set_id = :set"), {"set": set_id}
+                ).scalars().all()
+                for rec_id in rec_ids:
+                    connection.execute(
+                        text("DELETE FROM recommendation_interactions WHERE recommendation_id = :id"), {"id": rec_id}
+                    )
+                connection.execute(
+                    text("DELETE FROM next_action_recommendations WHERE set_id = :set"), {"set": set_id}
+                )
+            connection.execute(
+                text("DELETE FROM recommendation_sets WHERE session_id = :sid AND owner_id = :owner"),
+                {"sid": session_id, "owner": owner},
+            )
+            connection.execute(
+                text("DELETE FROM practice_records WHERE owner_id = :owner AND kind IN ('journey', 'note_draft', 'note_proposal') "
+                     "AND (id = :jid OR parent_id = :sid)"),
+                {"owner": owner, "jid": journey_id, "sid": session_id},
+            )
+            connection.execute(text("DELETE FROM learning_sessions WHERE id = :sid"), {"sid": session_id})
+        return True
 
     def save_action(self, action: RunStatus, idempotency_key: str | None = None) -> None:
         with self.transaction() as connection:

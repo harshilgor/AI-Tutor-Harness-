@@ -3,7 +3,7 @@
 import { useEffect, useState } from 'react';
 import { AnimatePresence, motion, useReducedMotion } from 'motion/react';
 import { Button } from '@/components/ui/button';
-import { request } from '@/lib/api';
+import { learningApi, request } from '@/lib/api';
 import { cancelWorkflow, getQuiz, workflow, waitForJob, type Quiz } from '@/lib/learning-workflows';
 import { AssessmentCard } from './assessment-card';
 import { openWorkspaceSource } from '@/lib/workspace-events';
@@ -54,6 +54,20 @@ export function QuizWorkspace({ sessionId, conceptId, inline = false, onReturn, 
     if (!sid) { setError('Start a chat and attach reference material first, then quiz that topic.'); return; }
     void act('/quizzes', { sessionId: sid, conceptIds: conceptId ? [conceptId] : [], count, difficulty, origin: inline ? 'learn_inline' : 'quiz', mode, modeConfig: mode === 'timed_short_quiz' ? { duration_seconds: duration } : {} });
   }
+  async function saveReviewChecklist() {
+    let sid = sessionId;
+    try { sid ||= localStorage.getItem('forma-chat-session'); } catch { /* No current session. */ }
+    if (!sid || !quiz || busy) return;
+    const weak = quiz.attempts.filter(attempt => attempt.score === null || attempt.score < 0.7).map(attempt => attempt.id);
+    if (!weak.length) { setNotice('No gaps found — nothing to add to your study note.'); return; }
+    setBusy(true); setError('');
+    try {
+      const link = sid ? await learningApi.getStudyNote(sid).catch(() => null) : null;
+      const result = await workflow(`/sessions/${sid}/note-proposals`, { origin: 'quiz', attemptIds: weak, expectedNoteRevision: link?.revision ?? null }, `note-proposal:quiz:${quiz.id}`);
+      setNotice(result?.status === 'applied' ? 'Review checklist added to your study note.' : 'Review checklist proposed — accept it from the chat.');
+    } catch (cause) { setError(cause instanceof Error ? cause.message : 'The checklist could not be proposed.'); }
+    finally { setBusy(false); }
+  }
   const secondsLeft = quiz?.mode === 'timed_short_quiz' ? Math.max(0, Math.ceil((quiz.deadlineAt ? new Date(quiz.deadlineAt).getTime() - now : (quiz.remainingSeconds || 0) * 1000) / 1000)) : null;
   const timeExpired = secondsLeft === 0 && !!quiz?.deadlineAt;
   return <section className={inline ? styles.inline : styles.page} aria-label={inline ? 'Understanding check' : 'Quiz workspace'}>
@@ -71,7 +85,7 @@ export function QuizWorkspace({ sessionId, conceptId, inline = false, onReturn, 
         onHint={() => void act(`/presentations/${quiz.current!.id}/hints`, {})}
         onChallenge={reason => void act(`/attempts/${quiz.current!.attemptId}/challenges`, { reason })} onCreateRepairNote={onCreateRepairNote} onOpenSource={openWorkspaceSource} /></motion.div>}</AnimatePresence>
       {quiz.status !== 'completed' && quiz.current?.attemptId && <Button disabled={busy} variant="outline" onClick={() => void act(`/quizzes/${quiz.id}/retry`, { expectedRevision: quiz.revision })}>Try again with help</Button>}
-      {quiz.status === 'completed' ? <div className={styles.card}><h2>Session complete</h2><p>{quiz.summary.score === null ? 'No scored answers yet.' : `${quiz.summary.score}% across ${quiz.summary.evaluated} evaluated answers.`}</p><p>{quiz.summary.assisted} with help · {quiz.summary.skipped} skipped · {quiz.summary.dontKnow} marked “I don’t know”</p><p className={styles.meta}>Practice score, not mastery. Questions adapt, so scores are not rankings.</p><div className={styles.actions}><Button variant="outline" onClick={onReturn}>Return to Learn</Button><Button variant="ghost" onClick={() => { setQuiz(null); localStorage.removeItem(`forma-${scope}`); }}>New quiz</Button></div></div> : <div className={styles.actions}>
+      {quiz.status === 'completed' ? <div className={styles.card}><h2>Session complete</h2><p>{quiz.summary.score === null ? 'No scored answers yet.' : `${quiz.summary.score}% across ${quiz.summary.evaluated} evaluated answers.`}</p><p>{quiz.summary.assisted} with help · {quiz.summary.skipped} skipped · {quiz.summary.dontKnow} marked “I don’t know”</p><p className={styles.meta}>Practice score, not mastery. Questions adapt, so scores are not rankings.</p><div className={styles.actions}><Button variant="outline" onClick={onReturn}>Return to Learn</Button><Button variant="outline" disabled={busy} onClick={() => void saveReviewChecklist()}>Save review checklist</Button><Button variant="ghost" onClick={() => { setQuiz(null); localStorage.removeItem(`forma-${scope}`); }}>New quiz</Button></div></div> : <div className={styles.actions}>
         {!timeExpired && (!quiz.current || quiz.current.attemptId) && <Button disabled={busy} onClick={() => void act(`/quizzes/${quiz.id}/next`, { expectedRevision: quiz.revision })}>{quiz.current ? 'Next question' : 'Generate first question'}</Button>}
         {!timeExpired && <Button disabled={busy} variant="ghost" onClick={() => void act(`/quizzes/${quiz.id}/${quiz.status === 'paused' ? 'resume' : 'pause'}`, { expectedRevision: quiz.revision })}>{quiz.status === 'paused' ? 'Resume quiz' : 'Pause'}</Button>}
         {onReturn && <Button variant="outline" onClick={onReturn}>Return to Learn</Button>}

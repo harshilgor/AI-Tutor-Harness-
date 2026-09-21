@@ -5,7 +5,7 @@ import os
 from typing import Literal
 from uuid import uuid4
 
-from fastapi import Depends, FastAPI, Header, HTTPException, status
+from fastapi import Depends, FastAPI, Header, HTTPException, Query, status
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse, StreamingResponse
 from pydantic import BaseModel, Field
@@ -37,7 +37,10 @@ from .session_models import (
     LearningSession,
     RunStatus,
     SessionCreate,
+    SessionRenameInput,
+    SessionSummary,
     TeachingActionInput,
+    short_title,
 )
 from .state_models import BranchUpdate, Position, StateEventCreate
 from .state_routes import build_state_router
@@ -48,11 +51,14 @@ from .context_service import canonical_evidence
 from .learning_routes import build_learning_router
 from .generation_routes import build_generation_router
 from .privacy_routes import build_privacy_router
+from .provider_key_routes import build_provider_key_router
 from .workspace_note_routes import build_workspace_note_router
 from .workspace_note_context import WorkspaceNoteContextService
 from .workspace_note_service import WorkspaceNoteError
 from .recommendation_routes import build_recommendation_router
 from .backup_routes import build_backup_router
+from .study_note_routes import build_study_note_router
+from .usage_routes import build_usage_router
 
 app = FastAPI(title="AI Tutor Harness API", version="0.1.0")
 local_web_origin = os.getenv("FORMA_WEB_ORIGIN", "http://127.0.0.1:3000")
@@ -91,9 +97,12 @@ app.include_router(build_material_router(get_store, lambda: lesson_provider))
 app.include_router(build_learning_router(get_store, lambda: lesson_provider))
 app.include_router(build_generation_router(get_store, lambda: lesson_provider))
 app.include_router(build_privacy_router(get_store))
+app.include_router(build_provider_key_router())
 app.include_router(build_workspace_note_router(get_store))
 app.include_router(build_recommendation_router(get_store))
 app.include_router(build_backup_router(get_store))
+app.include_router(build_study_note_router(get_store, lambda: lesson_provider))
+app.include_router(build_usage_router(get_store))
 
 
 @app.get("/health")
@@ -220,6 +229,7 @@ def create_learning_session(request: SessionCreate, db: Store = Depends(get_stor
         domain_pack_id=request.domain_pack_id,
         domain_pack_version=pack["version"] if request.domain_pack_id else None,
         goal=request.goal,
+        title=short_title(request.topic or request.goal),
         gear=request.gear,
         created_at=utc_now(),
         updated_at=utc_now(),
@@ -257,6 +267,54 @@ def get_learning_session(session_id: str, db: Store = Depends(get_store)) -> Lea
     if session is None:
         raise HTTPException(status_code=404, detail={"code": "session_not_found", "message": "Learning session does not exist."})
     return session
+
+
+@app.get("/v1/sessions")
+def list_chat_sessions(
+    limit: int = Query(default=50, ge=1, le=200),
+    offset: int = Query(default=0, ge=0),
+    owner: str = Depends(material_owner),
+    db: Store = Depends(get_store),
+) -> dict:
+    """Newest-first conversation history. Metadata only; messages load on open."""
+    sessions, total = db.list_sessions(owner, limit, offset)
+    return {
+        "sessions": [
+            SessionSummary(
+                id=item.id,
+                title=item.title or short_title(item.goal),
+                goal=item.goal,
+                updated_at=item.updated_at,
+                turn_count=db.journey_turn_count(owner, item.id),
+            ).model_dump(mode="json", by_alias=True)
+            for item in sessions
+        ],
+        "total": total,
+    }
+
+
+@app.patch("/v1/sessions/{session_id}", response_model=LearningSession)
+def rename_chat_session(
+    session_id: str,
+    request: SessionRenameInput,
+    owner: str = Depends(material_owner),
+    db: Store = Depends(get_store),
+) -> LearningSession:
+    updated = db.rename_session(session_id, owner, request.title)
+    if updated is None:
+        raise HTTPException(status_code=404, detail={"code": "session_not_found", "message": "Learning session does not exist."})
+    return updated
+
+
+@app.delete("/v1/sessions/{session_id}", status_code=status.HTTP_204_NO_CONTENT)
+def delete_chat_session(
+    session_id: str,
+    owner: str = Depends(material_owner),
+    db: Store = Depends(get_store),
+) -> None:
+    if not db.delete_session(session_id, owner):
+        raise HTTPException(status_code=404, detail={"code": "session_not_found", "message": "Learning session does not exist."})
+    return None
 
 
 @app.post("/v1/sessions/{session_id}/actions", response_model=RunStatus, status_code=status.HTTP_202_ACCEPTED)

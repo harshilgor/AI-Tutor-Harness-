@@ -152,6 +152,7 @@ export type LearningSession = {
   graphId: string;
   graphRevision: number;
   goal?: string | null;
+  title?: string | null;
   currentConceptId?: string | null;
   currentLessonId?: string | null;
   stateVersion: number;
@@ -305,11 +306,41 @@ export async function request<T>(path: string, init: RequestInit = {}): Promise<
     }
   }
   if (!response.ok) {
-    const envelope = body && typeof body === 'object' ? body as ErrorResponse & { detail?: ErrorResponse } : {};
-    const error = envelope.detail && typeof envelope.detail === 'object' ? envelope.detail : envelope;
-    throw new LearningApiError(response.status, error.code || 'request_failed', error.message || `Learning API request failed (${response.status})`, error.details);
+    const envelope = body && typeof body === 'object' ? body as ErrorResponse & { detail?: unknown } : {};
+    const rawDetail = envelope.detail;
+    // FastAPI's default errors (e.g. unknown routes on a stale backend) carry
+    // a plain-string detail; surface it instead of a generic status message.
+    const error = typeof rawDetail === 'object' && rawDetail !== null ? rawDetail as ErrorResponse : envelope;
+    const message = typeof rawDetail === 'string' && rawDetail
+      ? rawDetail
+      : error.message || `Learning API request failed (${response.status})`;
+    throw new LearningApiError(response.status, error.code || 'request_failed', message, error.details);
   }
   return body as T;
+}
+
+/**
+ * Map low-level API failures to human states. A 404/405 against a known
+ * endpoint almost always means the running tutor service predates it, so say
+ * so instead of leaking status codes. Mirrors the chat-history pattern.
+ */
+export type FriendlyServiceError = { message: string; detail: string };
+
+export function friendlyServiceError(cause: unknown, service: string): FriendlyServiceError {
+  const raw = cause instanceof Error ? cause.message : 'Unknown error.';
+  if (cause instanceof LearningApiError && (cause.status === 404 || cause.status === 405)) {
+    return {
+      message: `${service} needs the latest tutor service.`,
+      detail: 'Restart the local API with start-local.ps1, then return here.',
+    };
+  }
+  if (raw.startsWith('Cannot connect to the tutor service')) {
+    return {
+      message: 'Could not reach the tutor service.',
+      detail: 'Start the local app with start-local.ps1, then try again.',
+    };
+  }
+  return { message: `${service} could not be loaded.`, detail: raw };
 }
 
 export type CreateTopicInput = {
@@ -355,6 +386,116 @@ export type BaselineGraph = {
 export type BaselineGraphResponse = {
   job: { id: string; scope_id: string; status: string; stage: string; progress: number; graph_id?: string | null; warnings: string[] };
   graph?: BaselineGraph | null;
+};
+
+export type ChatSessionSummary = {
+  id: string;
+  title: string;
+  goal?: string | null;
+  updatedAt: string;
+  turnCount: number;
+};
+
+export type ChatSessionList = {
+  sessions: ChatSessionSummary[];
+  total: number;
+};
+
+export type StudyNoteLink = {
+  noteId: string;
+  title: string;
+  revision: number;
+  tutorUpdates: 'ask' | 'auto' | 'never';
+  sessionIds: string[];
+  sections: Array<Record<string, unknown>>;
+};
+
+export type NoteProposalRecord = {
+  id: string;
+  sessionId: string;
+  noteId: string;
+  origin: 'turn' | 'quiz' | 'insight';
+  status: 'proposed' | 'applied' | 'rejected';
+  heading: string;
+  body: string;
+  sectionId?: string | null;
+  conceptTitle?: string | null;
+  source: Record<string, unknown>;
+  revision: number;
+};
+
+export type ProviderSettingsStatus = {
+  provider: string;
+  openRouterConfigured: boolean;
+  openAiConfigured: boolean;
+  restartRequired: boolean;
+};
+
+export type UsageRange = '7d' | '30d' | 'all';
+
+export type UsageTotals = {
+  totalTokens: number;
+  promptTokens: number;
+  completionTokens: number;
+  generations: number;
+  exactGenerations: number;
+  estimatedGenerations: number;
+  providerCost: number;
+  costIsExact: boolean;
+};
+
+export type UsageDay = { date: string; totalTokens: number; generations: number };
+export type UsageModelEntry = { model: string; totalTokens: number; generations: number };
+export type UsageProviderEntry = { provider: string; totalTokens: number; generations: number };
+
+export type UsageSummary = {
+  range: string;
+  totals: UsageTotals;
+  byDay: UsageDay[];
+  byModel: UsageModelEntry[];
+  byProvider: UsageProviderEntry[];
+};
+
+export type AnalyticsDimension = 'mode' | 'model' | 'provider';
+
+export type AnalyticsSeries = {
+  key: string;
+  totalTokens: number;
+  generations: number;
+  sharePct: number;
+  points: number[];
+  genPoints: number[];
+};
+
+export type AnalyticsDay = {
+  date: string;
+  totalTokens: number;
+  generations: number;
+  promptTokens: number;
+  completionTokens: number;
+  cost: number;
+};
+
+export type AnalyticsSessionModel = { model: string; totalTokens: number; generations: number };
+
+export type AnalyticsSession = {
+  sessionId: string;
+  title: string;
+  totalTokens: number;
+  generations: number;
+  providerCost: number;
+  costIsExact: boolean;
+  lastActive: string | null;
+  byModel: AnalyticsSessionModel[];
+};
+
+export type UsageAnalytics = {
+  range: string;
+  dimension: string;
+  totals: UsageTotals;
+  days: AnalyticsDay[];
+  series: AnalyticsSeries[];
+  topSessions: AnalyticsSession[];
 };
 
 export type LocalDataExport = {
@@ -446,6 +587,81 @@ export const learningApi = {
 
   createSession(input: { graphId?: string; topic?: string; gear?: Gear; graphRevision?: number; goal?: string }): Promise<LearningSession> {
     return request<LearningSession>('/v1/sessions', { method: 'POST', body: JSON.stringify(input) });
+  },
+
+  listChatSessions(params: { limit?: number; offset?: number } = {}): Promise<ChatSessionList> {
+    const query = new URLSearchParams();
+    if (params.limit !== undefined) query.set('limit', String(params.limit));
+    if (params.offset !== undefined) query.set('offset', String(params.offset));
+    const suffix = query.size ? `?${query.toString()}` : '';
+    return request<ChatSessionList>(`/v1/sessions${suffix}`);
+  },
+
+  renameChatSession(sessionId: string, title: string): Promise<LearningSession> {
+    return request<LearningSession>(`/v1/sessions/${encodeURIComponent(sessionId)}`, { method: 'PATCH', body: JSON.stringify({ title }) });
+  },
+
+  deleteChatSession(sessionId: string): Promise<void> {
+    return request<void>(`/v1/sessions/${encodeURIComponent(sessionId)}`, { method: 'DELETE' });
+  },
+
+  getProviderSettings(): Promise<ProviderSettingsStatus> {
+    return request<ProviderSettingsStatus>('/v1/provider-settings');
+  },
+
+  saveProviderKey(provider: 'openrouter' | 'openai', apiKey: string): Promise<ProviderSettingsStatus> {
+    return request<ProviderSettingsStatus>('/v1/provider-settings', { method: 'PUT', body: JSON.stringify({ provider, apiKey }) });
+  },
+
+  deleteProviderKey(provider: 'openrouter' | 'openai'): Promise<ProviderSettingsStatus> {
+    return request<ProviderSettingsStatus>(`/v1/provider-settings/${encodeURIComponent(provider)}`, { method: 'DELETE' });
+  },
+
+  async getStudyNote(sessionId: string): Promise<StudyNoteLink | null> {
+    try {
+      return await request<StudyNoteLink>(`/v1/sessions/${encodeURIComponent(sessionId)}/study-note`);
+    } catch (cause) {
+      if (cause instanceof LearningApiError && cause.status === 404) return null;
+      throw cause;
+    }
+  },
+
+  createStudyNote(sessionId: string): Promise<StudyNoteLink> {
+    return request<StudyNoteLink>(`/v1/sessions/${encodeURIComponent(sessionId)}/study-note`, { method: 'POST' });
+  },
+
+  setStudyNoteMode(noteId: string, tutorUpdates: StudyNoteLink['tutorUpdates'], expectedRevision: number): Promise<{ noteId: string; revision: number; tutorUpdates: StudyNoteLink['tutorUpdates'] }> {
+    return request(`/v1/study-notes/${encodeURIComponent(noteId)}/settings`, {
+      method: 'PATCH', body: JSON.stringify({ tutorUpdates, expectedRevision }),
+    });
+  },
+
+  saveStudyInsight(sessionId: string, input: { heading?: string; body: string }): Promise<{ noteId: string; revision: number; sectionId: string }> {
+    return request(`/v1/sessions/${encodeURIComponent(sessionId)}/study-note/insights`, { method: 'POST', body: JSON.stringify(input) });
+  },
+
+  listNoteProposals(sessionId: string, status?: string): Promise<{ proposals: NoteProposalRecord[] }> {
+    const suffix = status ? `?${new URLSearchParams({ status })}` : '';
+    return request(`/v1/sessions/${encodeURIComponent(sessionId)}/note-proposals${suffix}`);
+  },
+
+  acceptNoteProposal(proposalId: string, input: { body?: string; heading?: string; expectedRevision?: number }): Promise<{ proposalId: string; status: string }> {
+    return request(`/v1/note-proposals/${encodeURIComponent(proposalId)}/accept`, { method: 'POST', body: JSON.stringify(input) });
+  },
+
+  rejectNoteProposal(proposalId: string): Promise<{ proposalId: string; status: string }> {
+    return request(`/v1/note-proposals/${encodeURIComponent(proposalId)}/reject`, { method: 'POST' });
+  },
+
+  getUsageSummary(range: UsageRange = 'all', sessionId?: string): Promise<UsageSummary> {
+    const query = new URLSearchParams({ range });
+    if (sessionId) query.set('sessionId', sessionId);
+    return request<UsageSummary>(`/v1/usage/summary?${query.toString()}`);
+  },
+
+  getUsageAnalytics(range: '7d' | '30d' = '7d', dimension: AnalyticsDimension = 'mode', limit = 5): Promise<UsageAnalytics> {
+    const query = new URLSearchParams({ range, dimension, limit: String(limit) });
+    return request<UsageAnalytics>(`/v1/usage/analytics?${query.toString()}`);
   },
 
   explainLesson(lessonId: string, input: { blockId: string; selectedText: string; mode?: 'explain' | 'simpler' | 'example' | 'symbols' | 'why' }, options?: { signal?: AbortSignal }): Promise<{ blocks: Array<{ heading: string; body: string }> }> {

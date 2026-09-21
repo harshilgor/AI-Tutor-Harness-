@@ -12,7 +12,7 @@ from typing import AsyncIterator, Protocol
 from .generation_models import GenerationEvent, GenerationRequest
 from .generation_store import GenerationStore, TERMINAL
 from .journey_service import JourneyService
-from .model_provider import ModelProviderError
+from .model_provider import ModelProviderError, usage_metrics
 from .streaming_lesson import ProgressiveLessonParser
 
 ERRORS = {"VALIDATION_FAILED", "CONTEXT_FAILED", "PROVIDER_TIMEOUT", "PROVIDER_ERROR", "VISION_UNSUPPORTED", "STREAM_INTERRUPTED", "REPLAY_EXPIRED", "CANCELLED", "PERSISTENCE_FAILED", "REVISION_CONFLICT"}
@@ -166,10 +166,35 @@ class GenerationManager:
                 artifact, journey = JourneyService(self.store, self.provider).commit_stream(connection, owner, prepared, request, body)
                 result = {"lessonId": artifact.id, "revision": journey["revision"] + 1, "sessionId": journey["sessionId"]}
                 completed_at = time.time(); elapsed = max(completed_at - (first_delta_at or provider_started_at), .001)
-                self.records.update_metrics(generation_id, {"completedAt": completed_at, "completionSeconds": completed_at - started_at,
-                    "outputCharacters": len(body), "estimatedOutputTokens": max(1, len(body) // 4), "estimatedTokensPerSecond": (len(body) / 4) / elapsed}, connection)
+                exact_usage = getattr(self.provider, "last_usage", None)
+                provider_label = str(getattr(self.provider, "provider_name", "unknown") or "unknown").split("/")[0].lower()
+                if provider_label not in {"openrouter", "openai"}:
+                    provider_label = "openrouter" if not bool(getattr(self.provider, "is_openai", False)) else "openai"
+                final_metrics: dict = {"completedAt": completed_at, "completionSeconds": completed_at - started_at,
+                    "outputCharacters": len(body), "estimatedOutputTokens": max(1, len(body) // 4), "estimatedTokensPerSecond": (len(body) / 4) / elapsed}
+                exact_fragment = usage_metrics(exact_usage, provider=provider_label) if exact_usage is not None else {}
+                if exact_fragment:
+                    final_metrics.update(exact_fragment)
+                else:
+                    final_metrics["usageSource"] = "estimated"
+                    final_metrics["usageProvider"] = provider_label
+                self.records.update_metrics(generation_id, final_metrics, connection)
                 self.records.transition(generation_id, "completed", sequence=sequence, result=result, connection=connection)
-            await self.buffer.append(generation_id, "generation.completed", {"result": result})
+            usage_event: dict = {"result": result}
+            try:
+                completed_record = self.records.get(owner, generation_id)
+                completed_metrics = completed_record.get("metrics") or {}
+                usage_event["usage"] = {
+                    "totalTokens": completed_metrics.get("totalTokens", completed_metrics.get("estimatedOutputTokens", 0)),
+                    "promptTokens": completed_metrics.get("promptTokens"),
+                    "completionTokens": completed_metrics.get("completionTokens"),
+                    "usageSource": completed_metrics.get("usageSource", "estimated"),
+                    "provider": completed_record.get("provider"),
+                    "model": completed_record.get("model"),
+                }
+            except Exception:
+                pass
+            await self.buffer.append(generation_id, "generation.completed", usage_event)
         except asyncio.CancelledError:
             self.records.update_metrics(generation_id, {"cancelled": True, "completedAt": time.time()})
             await self._cancel(generation_id)

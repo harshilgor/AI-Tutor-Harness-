@@ -22,6 +22,21 @@ def _to_camel(value: str) -> str:
     return head + "".join(part[:1].upper() + part[1:] for part in tail)
 
 
+def short_title(text: str | None, limit: int = 60) -> str:
+    """Derive a readable conversation title without a model call.
+
+    The first user message (already stored as the session goal) is the
+    cheapest honest title source. Longer prompts are cut at a word boundary.
+    """
+    collapsed = " ".join((text or "").split())
+    if not collapsed:
+        return "Untitled conversation"
+    if len(collapsed) <= limit:
+        return collapsed
+    cut = collapsed[:limit].rsplit(" ", 1)[0] or collapsed[:limit]
+    return cut.rstrip() + "…"
+
+
 class ApiModel(BaseModel):
     """JSON uses the camelCase shape already defined by the web client."""
 
@@ -82,6 +97,7 @@ class LearningSession(ApiModel):
     domain_pack_id: str | None = None
     domain_pack_version: int | None = None
     goal: str | None = None
+    title: str | None = Field(default=None, max_length=120)
     current_concept_id: str | None = None
     current_lesson_id: str | None = None
     gear: TeachingGear = TeachingGear.guided
@@ -234,3 +250,27 @@ class TeachingActionResponse(RunStatus):
     """Alias-shaped response for callers that name the record an action."""
 
     pass
+
+
+class SessionRenameInput(ApiModel):
+    """Rename a conversation. The title is user-supplied, never model-generated."""
+
+    title: str = Field(min_length=1, max_length=120)
+
+    @field_validator("title")
+    @classmethod
+    def normalize_title(cls, value: str) -> str:
+        value = " ".join(value.split())
+        if not value:
+            raise ValueError("Title must not be blank.")
+        return value
+
+
+class SessionSummary(ApiModel):
+    """Lightweight chat-history entry: metadata only, never lesson content."""
+
+    id: str
+    title: str
+    goal: str | None = None
+    updated_at: datetime
+    turn_count: int = Field(default=0, ge=0)
