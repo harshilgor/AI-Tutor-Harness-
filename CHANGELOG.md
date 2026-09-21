@@ -6,6 +6,11 @@ All notable changes are recorded here. This project follows [Keep a Changelog](h
 
 ### Added
 
+- Persistent chat history in the sidebar with time grouping, search, rename, delete, and per-learner isolation.
+- Living study notes: each Learn chat owns a linked note; the tutor proposes concise sections (turns, side explorations, quiz checklists) with accept/edit/reject and tutor/user/shared ownership plus revision protection.
+- Fullscreen Settings with General, API keys, Notifications, Data & privacy, and About; browser clients can save provider keys to the local service configuration.
+- On-device usage analytics (tokens, generations, cost) with trend and top-session views.
+
 - Learn workflow with Ask/Learn mode, teaching gears, resumable learner journeys, inline assessment, and a direct path into Quiz.
 - Quiz workspace with generated question sets, answer evaluation, repair guidance, and evidence admission through the canonical learner-state service.
 - Local privacy controls to export learner records as JSON or permanently remove locally stored learner data and imported materials.
