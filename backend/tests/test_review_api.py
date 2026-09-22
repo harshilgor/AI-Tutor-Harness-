@@ -186,6 +186,74 @@ def test_evaluation_failure_does_not_corrupt_memory(env, monkeypatch):
     assert attempt["correctness"] is None
 
 
+def test_generated_review_multiple_choice_is_replaced_with_free_response():
+    from backend.app.review.question_service import generate_question
+
+    class MultipleChoiceProvider:
+        provider_name = "unsafe-review-mc"
+
+        def complete_json(self, prompt, max_tokens=4000):
+            return {
+                "question_type": "multiple_choice",
+                "prompt": "Which option describes the chain rule?",
+                "expected_answer": "Multiply local derivatives.",
+                "options": [
+                    {"id": "wrong", "label": "Add unrelated values."},
+                    {"id": "right", "label": "Multiply local derivatives."},
+                ],
+                "difficulty": "standard",
+            }
+
+    generated = generate_question(
+        MultipleChoiceProvider(),
+        concept_title="Chain rule",
+        concept_summary="Multiply local derivatives.",
+        source_excerpt="The chain rule multiplies local derivatives.",
+    )
+
+    assert generated.question_type == "short_answer"
+    assert generated.options == []
+
+
+def test_legacy_review_multiple_choice_cannot_admit_evidence(env):
+    from sqlalchemy import text
+
+    from backend.app.review.models import ReviewAnswerCommand, ReviewSessionCreate
+    from backend.app.review.session_service import ReviewSessionService
+
+    client, store, graph, session = env
+    service = ReviewSessionService(store, ReviewProvider())
+    session_id = service.create("local", ReviewSessionCreate(length="quick", session_id=session.id))["sessionId"]
+    public = service.public("local", session_id)
+    item = service.records.read("local", public.items[0].id, "review_item")
+    item.update({
+        "questionType": "multiple_choice",
+        "options": [{"id": "a", "label": "Assumed answer"}, {"id": "b", "label": "Other"}],
+        "correctOptionIds": ["a"],
+    })
+    with store.transaction() as conn:
+        service.records.put(conn, "local", "review_item", item, session_id, expected=item["revision"])
+    with store.engine.connect() as conn:
+        evidence_before = conn.execute(text("SELECT COUNT(*) FROM evidence WHERE learner_id='local'")).scalar_one()
+
+    graded = service.grade(
+        "local",
+        session_id,
+        item["id"],
+        ReviewAnswerCommand(response="", selected_ids=["a"], expected_revision=public.revision),
+    )
+    with store.transaction() as conn:
+        service.commit_grade(conn, "local", graded)
+
+    with store.engine.connect() as conn:
+        evidence_after = conn.execute(text("SELECT COUNT(*) FROM evidence WHERE learner_id='local'")).scalar_one()
+    refreshed = service.public("local", session_id)
+    attempt = next(candidate for candidate in refreshed.items if candidate.id == item["id"]).attempt
+    assert attempt["status"] == "evaluation_failed"
+    assert attempt["correctness"] is None
+    assert evidence_after == evidence_before
+
+
 def test_concept_sync_idempotent(env):
     client, store, graph, session = env
     sync = ConceptSyncService(store, ReviewProvider())

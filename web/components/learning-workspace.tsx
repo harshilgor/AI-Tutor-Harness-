@@ -12,9 +12,9 @@ import { Tabs, TabsList, TabsTrigger } from '@/components/ui/tabs';
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
 import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle } from '@/components/ui/dialog';
 import { Sheet, SheetContent, SheetDescription, SheetHeader, SheetTitle } from '@/components/ui/sheet';
-import { maps, mapEdges, positions, type Concept, type Gear, type LearningMap } from '@/lib/learning-content';
+import { maps, mapEdges, positions, type Gear, type LearningMap } from '@/lib/learning-content';
 import { learningApi, type LessonArtifact } from '@/lib/api';
-import { workflow } from '@/lib/learning-workflows';
+import { navigateToSession, rememberSessionHint, resolveSessionHint, sessionIdFromPath, workflow } from '@/lib/learning-workflows';
 import { LocalDataSettings } from '@/components/local-data-settings';
 import { WorkspaceSplit } from '@/components/workspace-split';
 import { NotesWorkspace } from '@/components/workspace-panel';
@@ -33,13 +33,13 @@ function MiniMap({index}:{index:number}){
 }
 
 
-export default function LearningWorkspace(){
+export default function LearningWorkspace({initialSessionId=null}:{initialSessionId?:string|null}){
  const [state,setState]=useState<Stored>(INITIAL);
  const [learnVersion,setLearnVersion]=useState(0);
  const [ready,setReady]=useState(false);
   const [view,setView]=useState<'home'|'maps'|'saved'|'topic'|'quiz'|'notes'|'review'|'settings'>('home');
   const [settingsCategory,setSettingsCategory]=useState<SettingsCategory>('general');
-  const [activeSessionId,setActiveSessionId]=useState<string|null>(()=>{try{return localStorage.getItem('forma-chat-session');}catch{return null;}});
+  const [activeSessionId,setActiveSessionId]=useState<string|null>(()=>initialSessionId||resolveSessionHint());
   const [historyVersion,setHistoryVersion]=useState(0);
  const [quizContext,setQuizContext]=useState<{sessionId:string;conceptId?:string}|null>(null);
  const [reviewContext,setReviewContext]=useState<{sessionId?:string;conceptId?:string}|null>(null);
@@ -87,8 +87,31 @@ export default function LearningWorkspace(){
   useEffect(()=>{const desktop=(window as Window & {formaDesktop?:{onOpenSettings?: (callback:()=>void)=>()=>void}}).formaDesktop;return desktop?.onOpenSettings?.(()=>{setSettingsCategory('general');setView('settings');setBranchId(null);});},[]);
   useEffect(()=>{const key=(e:KeyboardEvent)=>{if((e.metaKey||e.ctrlKey)&&e.key.toLowerCase()==='k'){e.preventDefault();setView('home');setBranchId(null);setTimeout(()=>document.getElementById('topic')?.focus(),0)}if(e.key==='Escape'&&branchId){setBranchId(null);triggerRef.current?.focus();}const target=e.target as HTMLElement|null;const typing=target&&(target.tagName==='INPUT'||target.tagName==='TEXTAREA'||target.tagName==='SELECT'||target.isContentEditable);if(e.ctrlKey&&!e.metaKey&&!e.shiftKey&&!e.altKey&&e.key===','&&!typing){e.preventDefault();setSettingsCategory('general');setView('settings');setBranchId(null);}};window.addEventListener('keydown',key);return()=>window.removeEventListener('keydown',key)},[branchId]);
 
-   function openSession(id:string|null){try{if(id){localStorage.setItem('forma-chat-session',id);}else{localStorage.removeItem('forma-chat-session');}localStorage.removeItem('forma-job:chat');}catch{/* Optional resume pointer */}setActiveSessionId(id);setQuizContext(null);setLearnVersion(v=>v+1);setHistoryVersion(v=>v+1);setView('home');setBranchId(null);setTimeout(()=>document.getElementById('topic')?.focus(),0);}
-  useEffect(()=>{const sync=()=>{try{setActiveSessionId(localStorage.getItem('forma-chat-session'));setHistoryVersion(v=>v+1);}catch{}};window.addEventListener('forma:chat-history-changed',sync);return()=>window.removeEventListener('forma:chat-history-changed',sync);},[]);
+   function openSession(id:string|null){
+    rememberSessionHint(id);
+    navigateToSession(id);
+    try{localStorage.removeItem('forma-job:chat');}catch{/* Optional recovery pointer */}
+    setActiveSessionId(id);setQuizContext(null);setLearnVersion(v=>v+1);setHistoryVersion(v=>v+1);setView('home');setBranchId(null);setTimeout(()=>document.getElementById('topic')?.focus(),0);
+  }
+  useEffect(()=>{
+    if(initialSessionId){
+      rememberSessionHint(initialSessionId);
+      setActiveSessionId(initialSessionId);
+    }
+  },[initialSessionId]);
+  useEffect(()=>{
+    const onPop=()=>{
+      const fromRoute=sessionIdFromPath(window.location.pathname);
+      rememberSessionHint(fromRoute);
+      setActiveSessionId(fromRoute);
+      setLearnVersion(v=>v+1);
+      setHistoryVersion(v=>v+1);
+      setView('home');
+    };
+    window.addEventListener('popstate',onPop);
+    return()=>window.removeEventListener('popstate',onPop);
+  },[]);
+  useEffect(()=>{const sync=()=>{try{setActiveSessionId(resolveSessionHint());setHistoryVersion(v=>v+1);}catch{}};window.addEventListener('forma:chat-history-changed',sync);return()=>window.removeEventListener('forma:chat-history-changed',sync);},[]);
   useEffect(()=>{const open=(event:Event)=>{const id=(event as CustomEvent<string>).detail;if(typeof id==='string'&&id)openSession(id);};window.addEventListener(CHAT_SESSION_OPEN_EVENT,open);return()=>window.removeEventListener(CHAT_SESSION_OPEN_EVENT,open);},[]);
   useEffect(()=>{const open=(event:Event)=>{const detail=(event as CustomEvent<ReviewOpenDetail>).detail||{};setReviewContext({sessionId:detail.sessionId,conceptId:detail.conceptId});setView('review');setBranchId(null);};window.addEventListener(REVIEW_OPEN_EVENT,open);return()=>window.removeEventListener(REVIEW_OPEN_EVENT,open);},[]);
   useEffect(()=>{const open=(event:Event)=>{const id=(event as CustomEvent<string>).detail;if(typeof id==='string'&&id){setReviewContext({sessionId:id});setView('review');setBranchId(null);setReviewReturnBanner(null);}};window.addEventListener(REVIEW_RETURN_EVENT,open);return()=>window.removeEventListener(REVIEW_RETURN_EVENT,open);},[]);
@@ -101,8 +124,7 @@ export default function LearningWorkspace(){
   function closeBranch(){setBranchId(null);setTimeout(()=>triggerRef.current?.focus(),0);}
   async function saveBranchInsight(){
     if(!branch||insightBusy)return;
-    let sid:string|null=null;
-    try{sid=localStorage.getItem('forma-chat-session');}catch{}
+    let sid:string|null=activeSessionId||resolveSessionHint();
     if(!sid){setNotice('Start or open a chat first — insights belong to a living study note.');return;}
     const explanation=branch.mode==='Why?'?branchConcept.why:branchConcept.detail;
     const source=`${branch.anchor}\n\n${explanation}\n\nExample: ${branchConcept.example}`.slice(0,4000);
@@ -137,9 +159,9 @@ export default function LearningWorkspace(){
    <button className={'nav-item '+(view==='maps'?'active':'')} onClick={()=>{setView('maps');setBranchId(null)}}><Network size={17}/>Knowledge maps</button>
    <button className={'nav-item '+(view==='saved'?'active':'')} onClick={()=>{setView('saved');setBranchId(null)}}><BookOpen size={17}/>Saved explorations{state.saved.length+state.branches.length>0?<span className="nav-count">{state.saved.length+state.branches.length}</span>:null}</button>
    </SidebarContent><SidebarFooter><DropdownMenu><DropdownMenuTrigger asChild><button className="profile" aria-label="Account menu"><span className="avatar">L</span><div>Learner</div><ChevronsUpDown size={15}/></button></DropdownMenuTrigger><DropdownMenuContent side="top" align="start" sideOffset={8} className="w-[224px] learner-menu"><DropdownMenuLabel><div className="flex items-center gap-2.5"><span className="avatar">L</span><div className="grid gap-0.5"><strong className="text-sm font-semibold leading-none">Learner</strong><small className="text-xs text-muted-foreground">Free · On this device</small></div></div></DropdownMenuLabel><DropdownMenuSeparator /><DropdownMenuItem onSelect={()=>openSession(null)}><Plus size={15}/>New topic<DropdownMenuShortcut>⌘ K</DropdownMenuShortcut></DropdownMenuItem><DropdownMenuItem onSelect={()=>{setSettingsCategory('general');setView('settings');setBranchId(null);}}><Settings size={15}/>Settings<DropdownMenuShortcut>Ctrl+,</DropdownMenuShortcut></DropdownMenuItem><DropdownMenuItem onSelect={()=>{setSettingsCategory('about');setView('settings');setBranchId(null);}}><CircleHelp size={15}/>About Open Learn</DropdownMenuItem></DropdownMenuContent></DropdownMenu></SidebarFooter></Sidebar>
-   <WorkspaceSplit quizSessionId={quizContext?.sessionId} quizConceptId={quizContext?.conceptId} hidePanel={view==='notes'||view==='review'}><main className={'workspace '+(branch?'with-branch':'')}><header className="topbar"><div><SidebarTrigger/><button onClick={()=>{setView('home');setBranchId(null)}}>Workspace</button><ChevronRight size={13}/><strong>{view==='topic'?currentMap.title:view==='saved'?'Saved explorations':view==='maps'?'Knowledge maps':view==='quiz'?'Quiz':view==='notes'?'Notes':view==='review'?'Review':'Learn'}</strong></div></header>
+   <WorkspaceSplit quizSessionId={quizContext?.sessionId} quizConceptId={quizContext?.conceptId} hidePanel={view==='notes'||view==='review'}><main className={'workspace '+(branch?'with-branch':'')+(view==='home'?' chat-focus':'')}>{view==='home'?<div className="chat-sidebar-trigger"><SidebarTrigger/></div>:null}<header className="topbar"><div><SidebarTrigger/><button onClick={()=>{setView('home');setBranchId(null)}}>Workspace</button><ChevronRight size={13}/><strong>{view==='topic'?currentMap.title:view==='saved'?'Saved explorations':view==='maps'?'Knowledge maps':view==='quiz'?'Quiz':view==='notes'?'Notes':view==='review'?'Review':'Learn'}</strong></div></header>
    {reviewReturnBanner?<div className="toast-message" role="status"><RotateCcw size={16}/>Return to your review when you are ready.<button type="button" onClick={()=>{setReviewContext({sessionId:reviewReturnBanner});setView('review');setReviewReturnBanner(null);}}>Return to Review</button><button onClick={()=>setReviewReturnBanner(null)} aria-label="Dismiss"><X size={14}/></button></div>:null}
-   <div className="chat-view" hidden={view!=='home'}><LearnChat key={learnVersion} initialPrompt={askTutorPrompt||undefined} onInitialPromptConsumed={()=>setAskTutorPrompt(null)} onQuiz={(sessionId,conceptId)=>{setQuizContext({sessionId,conceptId});setView('quiz')}} onReview={(sessionId,conceptId)=>{setReviewContext({sessionId,conceptId});setView('review')}} /></div>
+   <div className="chat-view" hidden={view!=='home'}><LearnChat key={learnVersion} initialSessionId={activeSessionId} initialPrompt={askTutorPrompt||undefined} onInitialPromptConsumed={()=>setAskTutorPrompt(null)} onQuiz={(sessionId,conceptId)=>{setQuizContext({sessionId,conceptId});setView('quiz')}} onReview={(sessionId,conceptId)=>{setReviewContext({sessionId,conceptId});setView('review')}} /></div>
    {view==='notes'?<div className="notes-view"><NotesWorkspace onUseInChat={()=>setView('home')} /></div>:null}
   {view==='quiz' ? <QuizWorkspace sessionId={quizContext?.sessionId} conceptId={quizContext?.conceptId} onReturn={()=>setView('home')} /> : null}
   {view==='review' ? <ReviewWorkspace resumeSessionId={reviewContext?.sessionId} focusConceptId={reviewContext?.conceptId} onDone={()=>setView('home')} onStartLearning={()=>setView('home')} /> : null}

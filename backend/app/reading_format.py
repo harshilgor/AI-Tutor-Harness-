@@ -1,8 +1,27 @@
 """Shared presentation contract; formatting never establishes correctness."""
 READING_FORMAT = r"""
 Inside each JSON body string, use Markdown and LaTeX. Keep valid JSON: escape
-backslashes as JSON requires. Use $...$ for short inline math and $$ on separate
-lines around display equations. Do not wrap mathematics in code fences.
+backslashes as JSON requires (so \\ becomes \\\\ in JSON, and matrix row breaks
+are \\\\).
+
+Mathematics contract (required):
+- Inline math: $...$  e.g. The loss is $L = -\log p(y|x)$.
+- Display math: $$ on their own lines around the equation. Prefer $$ over \[ \].
+- Matrices, aligned steps, and cases belong inside $$ ... $$ using LaTeX
+  environments such as bmatrix, aligned, and cases.
+- Do not use \( \), \[ \], raw HTML, or pre-rendered KaTeX/HTML for math.
+- Do not wrap mathematics in code fences. Fenced blocks are only for code or
+  text diagrams.
+
+Example display matrix:
+
+$$
+W = \begin{bmatrix}
+1 & 2 \\
+-1 & 0.5
+\end{bmatrix}
+$$
+
 Use explain -> show -> interpret: introduce the idea in plain language, show
 the equation/example, then interpret its meaning. Give each derivation step
 its own line and name the mathematical rule used. Define unfamiliar symbols

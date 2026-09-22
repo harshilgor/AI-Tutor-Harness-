@@ -18,6 +18,7 @@ import {
   openChatSession,
 } from '@/lib/workspace-events';
 import styles from './review.module.css';
+import { RichContent } from './rich-content';
 
 const CONFIDENCE: { id: ReviewConfidence; label: string }[] = [
   { id: 'guessing', label: 'I was guessing' },
@@ -211,7 +212,7 @@ export function ReviewWorkspace({
 
       {current?.remediation ? <aside className={styles.remediation} aria-label="Short refresher">
         <strong>{current.remediation.heading}</strong>
-        <p>{current.remediation.body}</p>
+        <RichContent body={current.remediation.body} />
         <p className={styles.hint}>Now try retrieving it again.</p>
       </aside> : null}
 
@@ -248,8 +249,8 @@ export function ReviewWorkspace({
             {attempt?.response ? <div className={styles.feedbackBlock}><span>Your answer</span><p>{String(attempt.response)}</p></div> : null}
             <div className={styles.feedbackBlock} role="status">
               <span>Tutor evaluation</span>
-              <p>{attempt?.feedback}</p>
-              {attempt?.idealAnswer && attempt.status === 'evaluated' ? <details><summary>Show explanation</summary><p>{String(attempt.idealAnswer)}</p></details> : null}
+              <RichContent body={String(attempt?.feedback || '')} />
+              {attempt?.idealAnswer && attempt.status === 'evaluated' ? <details><summary>Show explanation</summary><RichContent body={String(attempt.idealAnswer)} /></details> : null}
             </div>
             {awaitingConfidence ? <fieldset className={styles.confidence}>
               <legend>How confident were you?</legend>

@@ -202,7 +202,9 @@ class ReviewSessionService:
                 "prompt": generated.prompt,
                 "expectedAnswer": generated.expected_answer,
                 "options": generated.options,
-                "correctOptionIds": [generated.options[0]["id"]] if generated.question_type == "multiple_choice" and generated.options else [],
+                # Review multiple choice is disabled until generation supplies
+                # an independently validated private answer-key contract.
+                "correctOptionIds": [],
                 "sourceExcerpt": excerpt[:4000],
                 "sourceLessonId": pick.get("sourceLessonId"),
                 "dueReason": pick.get("dueReason"),
@@ -307,7 +309,10 @@ class ReviewSessionService:
         if item["status"] == "skipped":
             problem("already_skipped", "This item was skipped.", 409)
 
-        evaluation = evaluate_answer(
+        # Legacy Review MC records may contain a key inferred from option order.
+        # They are not assessment-grade, so preserve the response but admit no
+        # evidence. New Review generation replaces MC with free response.
+        evaluation = None if item["questionType"] == "multiple_choice" else evaluate_answer(
             self.provider,
             concept_title=item["conceptTitle"],
             source_excerpt=item.get("sourceExcerpt") or "",
@@ -419,50 +424,29 @@ class ReviewSessionService:
             item["attempt"] = attempt
             self.records.put(conn, owner, "review_item", item, expected=item["revision"])
             memory = memory_store.get_memory(conn, owner, item["conceptId"])
-            decision = schedule_after_outcome(
+            from .scheduling_authority import apply_timing, decide_timing
+            decision = decide_timing(
                 outcome=attempt["correctness"],
                 confidence=command.confidence,
                 condition="assisted" if attempt.get("assisted") else "independent",
-                memory=snapshot_from_memory(memory),
+                memory=memory,
             )
-            if memory:
-                memory_store.apply_schedule_decision(
-                    conn, learner_id=owner, concept_id=item["conceptId"], decision=decision,
-                    outcome=attempt["correctness"], confidence=command.confidence,
-                    score=attempt.get("score"), question_type=item.get("questionType"),
-                )
-            # Update the schedule created by evidence admission (unique on originating evidence).
+            apply_timing(
+                conn,
+                learner_id=owner,
+                concept_id=item["conceptId"],
+                decision=decision,
+                outcome=attempt["correctness"],
+                confidence=command.confidence,
+                score=attempt.get("score"),
+                question_type=item.get("questionType"),
+                evidence_id=attempt.get("evidenceId"),
+                activity_type=item.get("questionType"),
+                apply_memory=bool(memory),
+                mirror_schedule=True,
+                source="memory",
+            )
             now = utc_now()
-            if attempt.get("evidenceId"):
-                updated = conn.execute(text("""
-                    UPDATE review_schedules SET due_at=:due, interval_days=:interval, status='scheduled',
-                        due_reason=:reason, activity_type=:activity, confidence_at_schedule=:confidence,
-                        scheduler_version=:version, updated_at=:now
-                    WHERE learner_id=:owner AND originating_evidence_id=:evidence
-                """), {
-                    "due": decision.due_at, "interval": max(1, int(round(decision.interval_days))),
-                    "reason": decision.due_reason, "activity": item.get("questionType"),
-                    "confidence": command.confidence, "version": SCHEDULER_VERSION, "now": now,
-                    "owner": owner, "evidence": attempt["evidenceId"],
-                }).rowcount
-                if not updated:
-                    conn.execute(text("""
-                        INSERT INTO review_schedules(
-                            id, learner_id, concept_id, originating_evidence_id, due_at, status, interval_days,
-                            created_at, updated_at, due_reason, activity_type, confidence_at_schedule, scheduler_version, priority_score)
-                        VALUES (:id, :owner, :concept, :evidence, :due, 'scheduled', :interval, :now, :now, :reason, :activity, :confidence, :version, NULL)
-                    """), {
-                        "id": f"review_{uuid4().hex}", "owner": owner, "concept": item["conceptId"],
-                        "evidence": attempt["evidenceId"], "due": decision.due_at,
-                        "interval": max(1, int(round(decision.interval_days))),
-                        "now": now, "reason": decision.due_reason, "activity": item.get("questionType"),
-                        "confidence": command.confidence, "version": SCHEDULER_VERSION,
-                    })
-            else:
-                conn.execute(text("""
-                    UPDATE review_schedules SET status='superseded', updated_at=:now
-                    WHERE learner_id=:owner AND concept_id=:concept AND status IN ('scheduled','due')
-                """), {"now": now, "owner": owner, "concept": item["conceptId"]})
             # Advance index when confidence recorded.
             ids = session["itemIds"]
             try:
@@ -491,14 +475,23 @@ class ReviewSessionService:
             item["attempt"] = {"id": uid("review_attempt"), "status": "skipped", "correctness": None, "score": None}
             self.records.put(conn, owner, "review_item", item, expected=item["revision"])
             memory = memory_store.get_memory(conn, owner, item["conceptId"])
-            decision = schedule_after_outcome(
-                outcome="skip", confidence=None, condition="independent", memory=snapshot_from_memory(memory),
+            from .scheduling_authority import apply_timing, decide_timing
+            decision = decide_timing(outcome="skip", confidence=None, condition="independent", memory=memory)
+            apply_timing(
+                conn,
+                learner_id=owner,
+                concept_id=item["conceptId"],
+                decision=decision,
+                outcome="skip",
+                confidence=None,
+                score=None,
+                question_type=item.get("questionType"),
+                evidence_id=None,
+                activity_type=item.get("questionType"),
+                apply_memory=bool(memory),
+                mirror_schedule=True,
+                source="memory",
             )
-            if memory:
-                memory_store.apply_schedule_decision(
-                    conn, learner_id=owner, concept_id=item["conceptId"], decision=decision,
-                    outcome="skip", confidence=None, score=None, question_type=item.get("questionType"),
-                )
             try:
                 index = session["itemIds"].index(item_id)
                 session["currentIndex"] = min(index + 1, len(session["itemIds"]) - 1)

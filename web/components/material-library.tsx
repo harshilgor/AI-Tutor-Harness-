@@ -3,6 +3,7 @@
 import { useEffect, useState } from 'react';
 import { Button } from '@/components/ui/button';
 import { apiBaseUrl, learningApi } from '@/lib/api';
+import { RichContent } from './rich-content';
 
 type Material = { id: string; title: string; versionId: string; status: string; role: string; jobId?: string; issues?: { message: string }[] };
 type Source = { spanId?: string; id?: string; title?: string; pageIndex: number; text: string };
@@ -91,7 +92,7 @@ export function MaterialLibrary() {
       <p className="text-sm">Sample papers and answer keys are stored separately and excluded from teaching retrieval in this first release.</p>
       <form onSubmit={event => { event.preventDefault(); void ask(); }} className="space-y-2"><label htmlFor="material-question">Ask your materials</label><textarea id="material-question" className="block w-full border rounded p-3" value={question} maxLength={4000} onChange={event => setQuestion(event.target.value)} /><Button disabled={busy || !question.trim() || !selected.length}>{busy ? 'Working…' : 'Find and explain'}</Button></form>
       {error && <p role="alert">{error}</p>}
-      {answer && <article><p>{answer.message}</p>{answer.blocks.map((block, i) => <section key={i}><h3 className="font-semibold mt-4">{block.heading}</h3><p className="whitespace-pre-wrap">{block.body}</p></section>)}{answer.sources.map((source, i) => <details key={source.spanId || i} className="mt-3"><summary>{source.title} · PDF page {source.pageIndex + 1} · retrieved passage</summary><p className="whitespace-pre-wrap">{source.text}</p></details>)}</article>}
+      {answer && <article><p>{answer.message}</p>{answer.blocks.map((block, i) => <section key={i}><h3 className="font-semibold mt-4">{block.heading}</h3><RichContent body={block.body} /></section>)}{answer.sources.map((source, i) => <details key={source.spanId || i} className="mt-3"><summary>{source.title} · PDF page {source.pageIndex + 1} · retrieved passage</summary><p className="whitespace-pre-wrap">{source.text}</p></details>)}</article>}
       {passages.length > 0 && <details open><summary>Extracted text ({passages.length} passages)</summary><div className="max-h-96 overflow-auto">{passages.map((source, i) => <section key={source.id || i} className="my-3"><h4>Page {source.pageIndex + 1}</h4><p className="whitespace-pre-wrap">{source.text}</p></section>)}</div></details>}
     </div>}
   </section>;

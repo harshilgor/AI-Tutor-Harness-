@@ -112,24 +112,43 @@ class StudyNoteService:
         title = (session.title or "").strip() or short_title(session.goal)
         if title == "Untitled conversation":
             title = "Study notes"
-        # Auto-apply by default so Learn can quietly grow the Lesson while the
-        # learner stays in chat. Ask/never remain available from Notes settings.
+        # Auto-apply by default so Learn writes the Lesson into Notes while
+        # chat stays for teaching, quizzes, and follow-ups.
         return self.notes.create(
             owner,
             WorkspaceNoteCreate(
                 title=title,
                 body=(
                     f"# {title}\n\n"
-                    "This lesson grows as you learn. The tutor adds durable ideas here—"
-                    "not a chat transcript. Your own writing is never rewritten.\n"
+                    "This Lesson was created when you started Learn. "
+                    "Keep learning in chat—quizzes, follow-ups, and the next steps—"
+                    "and durable ideas are added here as you go. "
+                    "Your own writing is never rewritten.\n"
                 ),
                 frontmatter={"study_note": True, "session_ids": [sid], "tutor_updates": "auto"},
             ),
         )
 
+    def ensure_learn_lesson(self, owner, sid) -> WorkspaceNoteRecord:
+        """Open the Notes Lesson for Learn: create if needed, auto-apply, flush backlog."""
+        note = self.get_or_create_note(owner, sid)
+        if self.tutor_updates_mode(note) == "ask":
+            note = self.set_tutor_updates(owner, note.id, "auto", note.revision)
+            self._flush_proposed(owner, sid)
+            note = self.notes.get(owner, note.id)
+        return note
+
+    def _flush_proposed(self, owner, sid) -> None:
+        """Apply any leftover chat proposals into the Lesson once auto is on."""
+        for record in self.list_proposals(owner, sid, status="proposed"):
+            try:
+                self.accept(owner, record["id"])
+            except Exception:
+                continue
+
     def tutor_updates_mode(self, note: WorkspaceNoteRecord) -> str:
-        mode = (note.frontmatter or {}).get("tutor_updates", "ask")
-        return mode if mode in {"ask", "auto", "never"} else "ask"
+        mode = (note.frontmatter or {}).get("tutor_updates", "auto")
+        return mode if mode in {"ask", "auto", "never"} else "auto"
 
     def set_tutor_updates(self, owner, note_id, mode: str, expected_revision: int) -> WorkspaceNoteRecord:
         if mode not in {"ask", "auto", "never"}:
@@ -311,6 +330,10 @@ class StudyNoteService:
         mode = self.tutor_updates_mode(note)
         if mode == "never":
             return {"skipped": "tutor_updates_never", "sessionId": sid, "noteId": note.id}
+        # Tutoring turns always write into the Notes Lesson. "ask" is only for
+        # optional insight prompts — not the primary Learn pipeline.
+        if command.origin == "turn" and mode == "ask":
+            mode = "auto"
         existing_rows = [row for row in self._provenance_rows(owner, note.id) if not row["tombstoned"]]
         existing_sections = []
         for row in existing_rows:

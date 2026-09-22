@@ -1,10 +1,71 @@
-.section { margin: 20px 0; padding: 18px; border: 1px solid color-mix(in srgb, var(--border) 85%, #6b7cff); border-radius: 16px; background: color-mix(in srgb, var(--card) 94%, #eef1ff); }
-.heading { display:flex; justify-content:space-between; align-items:start; gap:12px; margin-bottom:12px; }
-.heading span { color:var(--muted-foreground); font-size:11px; font-weight:700; letter-spacing:.09em; }
-.heading h2 { margin:2px 0 0; font-size:18px; }
-.cards { display:grid; grid-template-columns:repeat(auto-fit,minmax(190px,1fr)); gap:10px; }
-.card { display:flex; flex-direction:column; gap:8px; padding:13px; border:1px solid var(--border); border-radius:12px; background:var(--background); }
-.cardTop { display:flex; justify-content:space-between; color:var(--primary); }.cardTop button { border:0; background:transparent; color:var(--muted-foreground); cursor:pointer; padding:2px; }
-.card h3 { margin:0; font-size:15px; }.card p { margin:0; color:var(--muted-foreground); font-size:13px; line-height:1.4; }.card small { color:var(--muted-foreground); }.card button:last-child { margin-top:auto; align-self:flex-start; }
-dl { margin:0; font-size:12px; display:grid; gap:3px; } dl div { display:flex; justify-content:space-between; gap:8px; } dt { color:var(--muted-foreground); } dd { margin:0; text-align:right; }
-@media (max-width: 700px) { .section { padding:14px; }.cards { grid-template-columns:1fr; } }
+.list {
+  display: grid;
+  gap: 2px;
+  margin: 14px 0 8px;
+  min-width: 0;
+  /* Keep the last recommendation above the floating composer when scrolled to end. */
+  padding-bottom: 4px;
+}
+
+.action {
+  display: flex;
+  min-width: 0;
+  align-items: center;
+  gap: 8px;
+  width: 100%;
+  border: 0;
+  border-radius: 8px;
+  padding: 8px 4px;
+  background: transparent;
+  color: #51604a;
+  font: inherit;
+  font-size: 13px;
+  font-weight: 500;
+  text-align: left;
+  cursor: pointer;
+}
+
+.action span {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.action svg {
+  flex: none;
+  margin-left: auto;
+  color: #8b9584;
+}
+
+.action:hover:not(:disabled) {
+  background: #eef3ea;
+  color: #3d4a38;
+}
+
+.action:hover:not(:disabled) svg {
+  color: #5f6f58;
+}
+
+.action:disabled {
+  opacity: 0.55;
+  cursor: default;
+}
+
+.why {
+  margin: 2px 4px 6px;
+  color: #65705f;
+  font-size: 12px;
+}
+
+.why summary {
+  width: fit-content;
+  cursor: pointer;
+  font-weight: 600;
+}
+
+.why p {
+  margin: 6px 0 0;
+  max-width: 62ch;
+  line-height: 1.5;
+}

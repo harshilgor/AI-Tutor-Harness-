@@ -213,10 +213,16 @@ class LearnerStateService:
             self.withdraw_evidence(learner_id, evidence_id, "learner_challenged", connection=connection)
         return EvidenceChallenge(id=challenge_id, evidence_id=evidence_id, learner_id=learner_id, reason=reason, created_at=now)
 
-    def append_event(self, learner_id: str, request: StateEventCreate) -> tuple[StateEvent, bool]:
+    def append_event(
+        self,
+        learner_id: str,
+        request: StateEventCreate,
+        *,
+        connection: Connection | None = None,
+    ) -> tuple[StateEvent, bool]:
         now = utc_now()
         occurred_at = _utc(request.occurred_at)
-        with self.store.transaction() as connection:
+        with (nullcontext(connection) if connection is not None else self.store.transaction()) as connection:
             self._ensure_learner(connection, learner_id)
             if request.idempotency_key:
                 existing = connection.execute(text(
@@ -434,9 +440,8 @@ class LearnerStateService:
                  "occurred_at": now, "recorded_at": now})
 
     def _schedule_review(self, connection: Connection, learner_id: str, request: EvidenceCreate, evidence_id: str, now: datetime) -> None:
-        from .review.scheduler import SCHEDULER_VERSION, schedule_after_outcome, schedule_initial
         from .review import memory as memory_store
-        from .review.memory import snapshot_from_memory
+        from .review.scheduling_authority import apply_timing, decide_timing, insert_evidence_linked_schedule
 
         memory_store.ensure_learner(connection, learner_id)
         existing = memory_store.get_memory(connection, learner_id, request.concept_id)
@@ -449,41 +454,47 @@ class LearnerStateService:
         confidence = None
         if isinstance(request.provenance, dict):
             confidence = request.provenance.get("confidence") or request.provenance.get("learnerConfidence")
-        # Evidence without confidence uses outcome-only scheduling.
-        decision = schedule_after_outcome(
-            outcome=request.outcome,  # type: ignore[arg-type]
-            confidence=confidence,  # type: ignore[arg-type]
-            condition=request.condition.value,  # type: ignore[arg-type]
-            memory=snapshot_from_memory(existing),
+        decision = decide_timing(
+            outcome=request.outcome,
+            confidence=confidence,
+            condition=request.condition.value,
+            memory=existing,
             now=now,
-        ) if request.outcome in {"correct", "partial", "incorrect"} else schedule_initial(now=now)
+        )
         if existing and request.kind == "review" and request.provenance.get("schedulerPendingConfidence"):
             # Review sessions finalize interval when confidence is submitted.
             interval = max(1, int(round(decision.interval_days)))
             due_at = now + __import__("datetime").timedelta(days=interval)
-            reason = "Pending confidence"
-            version = SCHEDULER_VERSION
-        else:
-            if existing:
-                memory_store.apply_schedule_decision(
-                    connection, learner_id=learner_id, concept_id=request.concept_id, decision=decision,
-                    outcome=request.outcome, confidence=confidence, score=request.score,
-                    question_type=(request.provenance or {}).get("questionType"), now=now,
-                )
-            interval = max(1, int(round(decision.interval_days)))
-            due_at = decision.due_at
-            reason = decision.due_reason
-            version = decision.scheduler_version
-        connection.execute(text("""
-            INSERT INTO review_schedules
-            (id, learner_id, concept_id, originating_evidence_id, due_at, status, interval_days, created_at, updated_at,
-             due_reason, activity_type, confidence_at_schedule, scheduler_version, priority_score)
-            VALUES (:id, :learner_id, :concept_id, :evidence_id, :due_at, 'scheduled', :interval, :now, :now,
-                    :reason, :activity, :confidence, :version, NULL)
-        """), {"id": f"review_{uuid4().hex}", "learner_id": learner_id, "concept_id": request.concept_id,
-                 "evidence_id": evidence_id, "due_at": due_at, "interval": interval, "now": now,
-                 "reason": reason, "activity": (request.provenance or {}).get("questionType") or request.kind,
-                 "confidence": confidence, "version": version})
+            insert_evidence_linked_schedule(
+                connection,
+                learner_id=learner_id,
+                concept_id=request.concept_id,
+                evidence_id=evidence_id,
+                due_at=due_at,
+                interval_days=interval,
+                due_reason="Pending confidence",
+                activity_type=(request.provenance or {}).get("questionType") or request.kind,
+                confidence=confidence,
+                scheduler_version=decision.scheduler_version,
+                now=now,
+            )
+            return
+        apply_timing(
+            connection,
+            learner_id=learner_id,
+            concept_id=request.concept_id,
+            decision=decision,
+            outcome=request.outcome,
+            confidence=confidence,
+            score=request.score,
+            question_type=(request.provenance or {}).get("questionType"),
+            evidence_id=evidence_id,
+            activity_type=(request.provenance or {}).get("questionType") or request.kind,
+            apply_memory=bool(existing),
+            mirror_schedule=True,
+            now=now,
+            source="evidence",
+        )
 
     def _record_misconception(self, connection: Connection, learner_id: str, request: EvidenceCreate, evidence_id: str, now: datetime) -> None:
         row = connection.execute(text("""

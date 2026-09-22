@@ -13,7 +13,7 @@ from .models import QuestionType
 from .prompts import QUESTION_GENERATE_V1
 
 QUESTION_TYPES: list[QuestionType] = [
-    "free_recall", "explain", "apply", "compare", "diagnose", "teach", "short_answer", "multiple_choice",
+    "free_recall", "explain", "apply", "compare", "diagnose", "teach", "short_answer",
 ]
 
 
@@ -77,11 +77,13 @@ def generate_question(
             1200,
         )
         item = GeneratedQuestion.model_validate(raw)
+        # Review does not yet have a validated private answer-key contract.
+        # Fail closed by replacing provider-authored multiple choice with a
+        # free-response item instead of inferring correctness from option order.
+        if item.question_type == "multiple_choice":
+            return _fallback_question(concept_title, concept_summary, "short_answer")
         if item.prompt.strip() in recent:
             item = _fallback_question(concept_title, concept_summary, qtype)
-        if item.question_type == "multiple_choice" and len(item.options) < 2:
-            item.question_type = "short_answer"
-            item.options = []
         return item
     except (ModelProviderError, Exception):
         return _fallback_question(concept_title, concept_summary, qtype)

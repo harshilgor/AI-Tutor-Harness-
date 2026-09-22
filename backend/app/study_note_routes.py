@@ -41,7 +41,7 @@ def build_study_note_router(store_provider, provider_getter):
     @router.post("/sessions/{sid}/study-note", status_code=201)
     def create_study_note(sid: str, owner=Depends(material_owner), svc=Depends(service)):
         MaterialService(svc.store).session(owner, sid)
-        note = svc.get_or_create_note(owner, sid)
+        note = svc.ensure_learn_lesson(owner, sid)
         return {
             "noteId": note.id,
             "title": note.title,

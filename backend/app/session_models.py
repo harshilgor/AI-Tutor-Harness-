@@ -102,8 +102,51 @@ class LearningSession(ApiModel):
     current_lesson_id: str | None = None
     gear: TeachingGear = TeachingGear.guided
     state_version: int = 1
+    authority_revision: int = 1
+    current_branch_id: str | None = None
+    active_generation_id: str | None = None
+    active_quiz_id: str | None = None
+    active_review_id: str | None = None
+    active_job_id: str | None = None
     created_at: datetime
     updated_at: datetime
+
+
+class SessionTurnSummary(ApiModel):
+    index: int = Field(ge=0)
+    lesson_id: str | None = None
+    concept_id: str | None = None
+    mode: Literal["ask", "learn"] | None = None
+
+
+class SessionSnapshot(ApiModel):
+    session: LearningSession
+    revision: int = Field(ge=1)
+    mode: Literal["ask", "learn"]
+    journey_status: str
+    journey_revision: int = Field(ge=1)
+    journey_position: int = Field(ge=0)
+    current_concept_id: str | None = None
+    current_lesson_id: str | None = None
+    current_branch_id: str | None = None
+    active_generation_id: str | None = None
+    active_generation_status: str | None = None
+    active_quiz_id: str | None = None
+    active_review_id: str | None = None
+    active_job_id: str | None = None
+    current_recommendation_set_id: str | None = None
+    last_committed_turn: SessionTurnSummary | None = None
+
+
+class SessionPositionUpdate(ApiModel):
+    expected_revision: int = Field(ge=1)
+    current_concept_id: str | None = Field(default=None, max_length=160)
+    current_lesson_id: str | None = Field(default=None, max_length=160)
+    current_branch_id: str | None = Field(default=None, max_length=160)
+    active_generation_id: str | None = Field(default=None, max_length=160)
+    active_quiz_id: str | None = Field(default=None, max_length=160)
+    active_review_id: str | None = Field(default=None, max_length=160)
+    active_job_id: str | None = Field(default=None, max_length=160)
 
 
 class BranchAnchor(ApiModel):

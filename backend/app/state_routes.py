@@ -8,6 +8,14 @@ from typing import Any
 
 from fastapi import APIRouter, Header, HTTPException, Path, Query, Response, status
 
+from .adaptive_observability import (
+    ActivityCorrelationReport,
+    AdaptiveObservabilityError,
+    AdaptiveObservabilityService,
+    ClosedLoopChain,
+    ConceptSourceComparison,
+    ImmediateAdaptationInput,
+)
 from .state_models import (
     BranchCreate,
     BranchContextResponse,
@@ -55,10 +63,13 @@ def build_state_router(store_provider: Any) -> APIRouter:
     def service() -> LearnerStateService:
         return LearnerStateService(store_provider())
 
+    def adaptive_service() -> AdaptiveObservabilityService:
+        return AdaptiveObservabilityService(store_provider())
+
     def translate(operation):  # type: ignore[no-untyped-def]
         try:
             return operation()
-        except StateServiceError as exc:
+        except (StateServiceError, AdaptiveObservabilityError) as exc:
             raise HTTPException(status_code=exc.status_code, detail={"code": exc.code, "message": exc.message}) from exc
 
     @router.get("/learners/{learner_id}/state", response_model=LearnerStateResponse)
@@ -75,6 +86,44 @@ def build_state_router(store_provider: Any) -> APIRouter:
     def timeline(learner_id: str = learner_path(), cursor: str | None = Query(default=None, max_length=400), limit: int = Query(default=30, ge=1, le=100), x_dev_learner_id: str | None = Header(default=None, alias="X-Dev-Learner-Id")) -> TimelinePage:
         authorize(learner_id, x_dev_learner_id)
         return translate(lambda: service().timeline(learner_id, cursor, limit))
+
+    @router.get("/learners/{learner_id}/adaptive/policy-input", response_model=ImmediateAdaptationInput)
+    def adaptive_policy_input(
+        session_id: str = Query(alias="sessionId", min_length=1, max_length=160),
+        concept_id: str | None = Query(default=None, alias="conceptId", max_length=160),
+        learner_id: str = learner_path(),
+        x_dev_learner_id: str | None = Header(default=None, alias="X-Dev-Learner-Id"),
+    ) -> ImmediateAdaptationInput:
+        authorize(learner_id, x_dev_learner_id)
+        return translate(lambda: adaptive_service().policy_input(learner_id, session_id, concept_id))
+
+    @router.get("/learners/{learner_id}/adaptive/concepts/{concept_id}/sources", response_model=ConceptSourceComparison)
+    def adaptive_concept_sources(
+        concept_id: str,
+        learner_id: str = learner_path(),
+        x_dev_learner_id: str | None = Header(default=None, alias="X-Dev-Learner-Id"),
+    ) -> ConceptSourceComparison:
+        authorize(learner_id, x_dev_learner_id)
+        return adaptive_service().compare_concept_sources(learner_id, concept_id)
+
+    @router.get("/learners/{learner_id}/adaptive/activity-correlations", response_model=ActivityCorrelationReport)
+    def adaptive_activity_correlations(
+        learner_id: str = learner_path(),
+        limit: int = Query(default=100, ge=1, le=200),
+        x_dev_learner_id: str | None = Header(default=None, alias="X-Dev-Learner-Id"),
+    ) -> ActivityCorrelationReport:
+        authorize(learner_id, x_dev_learner_id)
+        return adaptive_service().activity_correlations(learner_id, limit)
+
+    @router.get("/learners/{learner_id}/adaptive/closed-loop", response_model=ClosedLoopChain)
+    def adaptive_closed_loop(
+        session_id: str = Query(alias="sessionId", min_length=1, max_length=160),
+        concept_id: str | None = Query(default=None, alias="conceptId", max_length=160),
+        learner_id: str = learner_path(),
+        x_dev_learner_id: str | None = Header(default=None, alias="X-Dev-Learner-Id"),
+    ) -> ClosedLoopChain:
+        authorize(learner_id, x_dev_learner_id)
+        return translate(lambda: adaptive_service().closed_loop_chain(learner_id, session_id, concept_id))
 
     @router.post("/learners/{learner_id}/evidence/{evidence_id}/challenge", response_model=EvidenceChallenge, status_code=status.HTTP_201_CREATED)
     def challenge_evidence(request: EvidenceChallengeCreate, evidence_id: str, learner_id: str = learner_path(), x_dev_learner_id: str | None = Header(default=None, alias="X-Dev-Learner-Id")) -> EvidenceChallenge:

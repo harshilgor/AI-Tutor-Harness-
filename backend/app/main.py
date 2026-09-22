@@ -60,6 +60,7 @@ from .backup_routes import build_backup_router
 from .study_note_routes import build_study_note_router
 from .usage_routes import build_usage_router
 from .review_routes import build_review_router
+from .session_snapshot_routes import build_session_snapshot_router
 
 app = FastAPI(title="AI Tutor Harness API", version="0.1.0")
 local_web_origin = os.getenv("FORMA_WEB_ORIGIN", "http://127.0.0.1:3000")
@@ -76,7 +77,7 @@ app.add_middleware(
 async def local_desktop_auth(request, call_next):
     """Protect a desktop-started loopback service without affecting dev/API use."""
     token = os.getenv("FORMA_API_TOKEN")
-    if token and request.method != "OPTIONS" and request.url.path != "/health":
+    if token and request.method != "OPTIONS" and request.url.path not in {"/health", "/health/web-evidence"}:
         if request.headers.get("X-Forma-Desktop-Token") != token:
             return JSONResponse(status_code=401, content={"code": "desktop_auth_required", "message": "The local desktop session is not authorized."})
     return await call_next(request)
@@ -105,16 +106,44 @@ app.include_router(build_backup_router(get_store))
 app.include_router(build_study_note_router(get_store, lambda: lesson_provider))
 app.include_router(build_usage_router(get_store))
 app.include_router(build_review_router(get_store, lambda: lesson_provider))
+app.include_router(build_session_snapshot_router(get_store))
 
 
 @app.get("/health")
-def health() -> dict[str, str]:
-    return {
+def health() -> dict:
+    payload: dict = {
         "status": "ok",
         "service": "learning-harness",
         "graph_provider": generator.provider_name,
         "lesson_provider": getattr(lesson_provider, "provider_name", "deterministic_baseline"),
     }
+    try:
+        from .web_evidence.readiness import evaluate_readiness
+
+        report = evaluate_readiness(store)
+        payload["webEvidence"] = report.as_dict()
+        if report.blocking_errors and any(
+            e != "web_evidence_retention_stale" for e in report.blocking_errors
+        ) and report.feature_flag_enabled:
+            payload["status"] = "degraded"
+    except Exception as exc:  # noqa: BLE001 — health must stay available
+        payload["webEvidence"] = {"status": "error", "error": type(exc).__name__}
+    return payload
+
+
+@app.get("/health/web-evidence")
+def web_evidence_health() -> dict:
+    """Dedicated readiness signal for web evidence schema, egress, and retention."""
+    from .web_evidence.readiness import evaluate_readiness
+
+    report = evaluate_readiness(store)
+    body = report.as_dict()
+    if report.feature_flag_enabled and any(
+        e != "web_evidence_retention_stale" for e in report.blocking_errors
+    ):
+        return JSONResponse(status_code=503, content=body)
+    return body
+
 
 
 @app.post("/v1/topic-scopes", response_model=TopicScope, status_code=status.HTTP_201_CREATED)

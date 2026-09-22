@@ -18,12 +18,21 @@ class NextActionRecommendation(ApiModel):
     effort_minutes: int = Field(ge=1, le=60)
     context: dict[str, str] = Field(default_factory=dict)
     score: int = Field(ge=0, le=100)
+    pedagogical_action: Literal["teach", "check", "repair"] | None = None
+    why_code: str | None = Field(default=None, max_length=120)
+    evidence_ids: list[str] = Field(default_factory=list, max_length=20)
+    input_digest: str | None = Field(default=None, max_length=64)
+    is_primary: bool = False
 
 
 class RecommendationSet(ApiModel):
     id: str
     session_id: str
     policy_version: str
+    input_digest: str | None = None
+    status: Literal["current", "superseded", "cancelled"] = "current"
+    superseded_by_set_id: str | None = None
+    fulfilled_evidence_id: str | None = None
     created_at: datetime
     recommendations: list[NextActionRecommendation] = Field(min_length=1, max_length=4)
 
@@ -33,3 +42,4 @@ class RecommendationInteractionCreate(ApiModel):
     # A small UI-only reason may be retained for dismissals; never note text,
     # answers, source passages, or model prompts.
     reason: str | None = Field(default=None, max_length=240)
+    evidence_id: str | None = Field(default=None, max_length=160)

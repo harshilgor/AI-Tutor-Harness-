@@ -93,6 +93,12 @@ class Store:
                 "current_concept_id": session.current_concept_id,
                 "current_lesson_id": session.current_lesson_id,
                 "state_version": session.state_version,
+                "authority_revision": session.authority_revision,
+                "current_branch_id": session.current_branch_id,
+                "active_generation_id": session.active_generation_id,
+                "active_quiz_id": session.active_quiz_id,
+                "active_review_id": session.active_review_id,
+                "active_job_id": session.active_job_id,
                 "updated_at": session.updated_at,
                 "payload": session.model_dump_json(),
             })

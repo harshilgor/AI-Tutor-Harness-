@@ -1,62 +1,103 @@
 "use client";
 
 import { useEffect, useRef, useState } from 'react';
-import { AnimatePresence, motion, useReducedMotion } from 'motion/react';
-import { ArrowRight, BookOpen, CircleHelp, ClipboardCheck, RotateCcw, X } from 'lucide-react';
-import { Button } from '@/components/ui/button';
+import { ArrowRight } from 'lucide-react';
 import { learningApi, type NextActionRecommendation, type RecommendationSet } from '@/lib/api';
 import styles from './next-action-cards.module.css';
 
-const icons = { learn: BookOpen, ask: CircleHelp, quiz: ClipboardCheck, review: RotateCcw };
+type LocalAction = {
+  id: string;
+  label: string;
+  kind: 'learn' | 'ask' | 'quiz' | 'review' | 'check';
+  item?: NextActionRecommendation;
+};
 
-export function NextActionCards({ sessionId, enabled, onLearn, onAsk, onQuiz, onReview }: {
-  sessionId: string; enabled: boolean;
-  onLearn: (item: NextActionRecommendation) => void | Promise<void>;
+function suggestionLabel(item: NextActionRecommendation): string {
+  const concept = item.conceptTitle?.trim();
+  if (item.pedagogicalAction === 'repair') return concept ? `Try a different approach to ${concept}` : 'Try a different explanation';
+  if (item.pedagogicalAction === 'check') return concept ? `Check ${concept}` : 'Check your understanding';
+  if (item.actionKind === 'learn') return concept ? `Continue with ${concept}` : (item.title || 'Continue learning');
+  if (item.actionKind === 'ask') return concept ? `Ask about ${concept}` : (item.title || 'Ask a follow-up');
+  if (item.actionKind === 'quiz') return concept ? `Quiz yourself on ${concept}` : (item.title || 'Quiz this concept');
+  if (item.actionKind === 'review') return concept ? `Review ${concept}` : (item.title || 'Review concepts');
+  return item.title || 'Continue';
+}
+
+export function NextActionCards({ sessionId, enabled, refreshKey, onLearn, onAsk, onQuiz, onReview, onCheck }: {
+  sessionId: string; enabled: boolean; refreshKey?: string | number;
+  onLearn: (item?: NextActionRecommendation) => void | Promise<void>;
   onAsk: (item: NextActionRecommendation) => void | Promise<void>;
-  onQuiz: (item: NextActionRecommendation) => void | Promise<void>;
-  onReview: (item: NextActionRecommendation) => void | Promise<void>;
+  onQuiz: (item?: NextActionRecommendation) => void | Promise<void>;
+  onReview: (item?: NextActionRecommendation) => void | Promise<void>;
+  onCheck: () => void;
 }) {
-  const reduceMotion = useReducedMotion();
   const [set, setSet] = useState<RecommendationSet | null>(null);
-  const [dismissed, setDismissed] = useState<Set<string>>(new Set());
-  const [expanded, setExpanded] = useState(false);
   const loaded = useRef<string | null>(null);
+
   useEffect(() => {
-    if (!enabled || loaded.current === sessionId) return;
+    const requestKey = `${sessionId}:${refreshKey ?? ''}`;
+    if (!enabled || loaded.current === requestKey) return;
     let active = true;
-    void learningApi.getRecommendations(sessionId).then(next => { if (active) { setSet(next); loaded.current = sessionId; } }).catch(() => undefined);
+    void learningApi.getRecommendations(sessionId).then(next => {
+      if (active) { setSet(next); loaded.current = requestKey; }
+    }).catch(() => undefined);
     return () => { active = false; };
-  }, [enabled, sessionId]);
+  }, [enabled, refreshKey, sessionId]);
+
   useEffect(() => {
-    if (!set) return;
-    for (const item of set.recommendations) {
+    if (!set?.recommendations.length) return;
+    for (const item of set.recommendations.slice(0, 3)) {
       void learningApi.recordRecommendationInteraction(item.id, 'impression', 'local', `${set.id}:${item.id}:impression`).catch(() => undefined);
     }
   }, [set]);
-  if (!set) return null;
-  const visible = set.recommendations.filter(item => !dismissed.has(item.id));
-  if (!visible.length) return null;
-  function interaction(id: string, eventType: 'selection' | 'dismissal' | 'failure') {
-    void learningApi.recordRecommendationInteraction(id, eventType).catch(() => undefined);
+
+  const actions: LocalAction[] = [];
+  const primary = set?.recommendations[0];
+  if (primary) {
+    const kind = primary.pedagogicalAction === 'check' ? 'check' : primary.actionKind;
+    actions.push({ id: primary.id, label: suggestionLabel(primary), kind, item: primary });
+  } else {
+    actions.push({ id: 'continue', label: 'Continue learning', kind: 'learn' });
   }
-  async function select(item: NextActionRecommendation) {
-    interaction(item.id, 'selection');
+
+  const kinds = new Set(actions.map(action => action.kind));
+  if (!kinds.has('check')) actions.push({ id: 'check', label: 'Check understanding', kind: 'check' });
+  if (!kinds.has('quiz')) actions.push({ id: 'quiz', label: 'Quiz this concept', kind: 'quiz' });
+  if (!kinds.has('review')) actions.push({ id: 'review', label: 'Review concepts', kind: 'review' });
+
+  async function select(action: LocalAction) {
+    if (action.item) {
+      void learningApi.recordRecommendationInteraction(action.item.id, 'selection').catch(() => undefined);
+    }
     try {
-      await ({ learn: onLearn, ask: onAsk, quiz: onQuiz, review: onReview }[item.actionKind])(item);
-    } catch { interaction(item.id, 'failure'); }
+      if (action.kind === 'check') { onCheck(); return; }
+      if (action.kind === 'learn') { await onLearn(action.item); return; }
+      if (action.kind === 'ask' && action.item) { await onAsk(action.item); return; }
+      if (action.kind === 'quiz') { await onQuiz(action.item); return; }
+      if (action.kind === 'review') { await onReview(action.item); return; }
+    } catch {
+      if (action.item) void learningApi.recordRecommendationInteraction(action.item.id, 'failure').catch(() => undefined);
+    }
   }
-  return <section className={styles.section} aria-label="Suggested next actions">
-    <div className={styles.heading}><div><span>WHAT NEXT</span><h2>Choose your next step</h2></div><Button variant="ghost" size="sm" onClick={() => setExpanded(value => !value)}>{expanded ? 'Fewer details' : 'Why these?'}</Button></div>
-    <div className={styles.cards}><AnimatePresence initial={false}>{visible.map((item, index) => {
-      const Icon = icons[item.actionKind];
-      return <motion.article className={styles.card} key={item.id} layout={!reduceMotion} initial={reduceMotion ? false : { opacity: 0, y: 10 }} animate={{ opacity: 1, y: 0 }} exit={reduceMotion ? undefined : { opacity: 0, scale: 0.96 }} transition={{ duration: 0.18, delay: reduceMotion ? 0 : index * 0.05, ease: 'easeOut' }}>
-        <div className={styles.cardTop}><Icon size={17} /><button type="button" aria-label={`Dismiss ${item.title}`} onClick={() => { setDismissed(current => new Set(current).add(item.id)); interaction(item.id, 'dismissal'); }}><X size={15} /></button></div>
-        <h3>{item.title}</h3><p>{item.rationale}</p>
-        {expanded ? <dl><div><dt>Concept</dt><dd>{item.conceptTitle}</dd></div><div><dt>Time</dt><dd>About {item.effortMinutes} min</dd></div><div><dt>Policy</dt><dd>{set.policyVersion}</dd></div></dl> : <small>{item.conceptTitle} · about {item.effortMinutes} min</small>}
-        <Button size="sm" variant="outline" onClick={() => void select(item)}>{item.actionKind === 'ask' ? 'Ask a question' : item.actionKind === 'quiz' ? 'Open quiz' : item.actionKind === 'review' ? 'Start review' : 'Continue learning'}<ArrowRight size={14} /></Button>
-      </motion.article>;
-    })}</AnimatePresence></div>
-  </section>;
+
+  return (
+    <div className={styles.list} aria-label="Suggested next steps">
+      {actions.map(action => (
+        <button
+          key={action.id}
+          type="button"
+          className={styles.action}
+          disabled={!enabled}
+          onClick={() => void select(action)}
+        >
+          <span>{action.label}</span>
+          <ArrowRight size={14} />
+        </button>
+      ))}
+      {primary?.rationale ? <details className={styles.why}>
+        <summary>Why this next?</summary>
+        <p>{primary.rationale}</p>
+      </details> : null}
+    </div>
+  );
 }
-
-

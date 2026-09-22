@@ -156,6 +156,49 @@ export type LearningSession = {
   currentConceptId?: string | null;
   currentLessonId?: string | null;
   stateVersion: number;
+  authorityRevision?: number;
+  currentBranchId?: string | null;
+  activeGenerationId?: string | null;
+  activeQuizId?: string | null;
+  activeReviewId?: string | null;
+  activeJobId?: string | null;
+};
+
+export type SessionTurnSummary = {
+  index: number;
+  lessonId?: string | null;
+  conceptId?: string | null;
+  mode?: 'ask' | 'learn' | null;
+};
+
+export type SessionSnapshot = {
+  session: LearningSession;
+  revision: number;
+  mode: 'ask' | 'learn';
+  journeyStatus: string;
+  journeyRevision: number;
+  journeyPosition: number;
+  currentConceptId?: string | null;
+  currentLessonId?: string | null;
+  currentBranchId?: string | null;
+  activeGenerationId?: string | null;
+  activeGenerationStatus?: string | null;
+  activeQuizId?: string | null;
+  activeReviewId?: string | null;
+  activeJobId?: string | null;
+  currentRecommendationSetId?: string | null;
+  lastCommittedTurn?: SessionTurnSummary | null;
+};
+
+export type SessionPositionUpdate = {
+  expectedRevision: number;
+  currentConceptId?: string | null;
+  currentLessonId?: string | null;
+  currentBranchId?: string | null;
+  activeGenerationId?: string | null;
+  activeQuizId?: string | null;
+  activeReviewId?: string | null;
+  activeJobId?: string | null;
 };
 
 export type BranchAnchor = {
@@ -589,6 +632,17 @@ export const learningApi = {
     return request<LearningSession>('/v1/sessions', { method: 'POST', body: JSON.stringify(input) });
   },
 
+  getSessionSnapshot(sessionId: string): Promise<SessionSnapshot> {
+    return request<SessionSnapshot>(`/v1/sessions/${encodeURIComponent(sessionId)}/snapshot`);
+  },
+
+  updateSessionPosition(sessionId: string, input: SessionPositionUpdate): Promise<SessionSnapshot> {
+    return request<SessionSnapshot>(`/v1/sessions/${encodeURIComponent(sessionId)}/position`, {
+      method: 'PATCH',
+      body: JSON.stringify(input),
+    });
+  },
+
   listChatSessions(params: { limit?: number; offset?: number } = {}): Promise<ChatSessionList> {
     const query = new URLSearchParams();
     if (params.limit !== undefined) query.set('limit', String(params.limit));
@@ -799,8 +853,8 @@ export const learningApi = {
     return request<RecommendationSet>(`/v1/sessions/${encodeURIComponent(sessionId)}/recommendations`, { headers: { 'X-Dev-Learner-Id': learnerId } });
   },
 
-  recordRecommendationInteraction(recommendationId: string, eventType: 'impression' | 'selection' | 'dismissal' | 'completion' | 'failure', learnerId = 'local', idempotencyKey = crypto.randomUUID()): Promise<void> {
-    return request<void>(`/v1/recommendations/${encodeURIComponent(recommendationId)}/interactions`, { method: 'POST', headers: { 'X-Dev-Learner-Id': learnerId, 'Idempotency-Key': idempotencyKey }, body: JSON.stringify({ eventType }) });
+  recordRecommendationInteraction(recommendationId: string, eventType: 'impression' | 'selection' | 'dismissal' | 'completion' | 'failure', learnerId = 'local', idempotencyKey = crypto.randomUUID(), evidenceId?: string): Promise<void> {
+    return request<void>(`/v1/recommendations/${encodeURIComponent(recommendationId)}/interactions`, { method: 'POST', headers: { 'X-Dev-Learner-Id': learnerId, 'Idempotency-Key': idempotencyKey }, body: JSON.stringify({ eventType, evidenceId }) });
   },
   exportLocalData(learnerId = 'local'): Promise<LocalDataExport> {
     return request<LocalDataExport>(`/v1/learners/${encodeURIComponent(learnerId)}/export`);
@@ -860,6 +914,20 @@ export const learningApi = {
       method: 'POST', headers: { 'X-Dev-Learner-Id': learnerId, 'Idempotency-Key': crypto.randomUUID() },
     });
   },
+  getConceptExplanation(conceptId: string, learnerId = 'local'): Promise<ConceptStateExplanation> {
+    return request<ConceptStateExplanation>(`/v1/learners/${encodeURIComponent(learnerId)}/state/${encodeURIComponent(conceptId)}/explanation`, {
+      headers: { 'X-Dev-Learner-Id': learnerId },
+    });
+  },
+  getLearnerTimeline(params: { cursor?: string; limit?: number } = {}, learnerId = 'local'): Promise<TimelinePage> {
+    const query = new URLSearchParams();
+    if (params.cursor) query.set('cursor', params.cursor);
+    if (params.limit !== undefined) query.set('limit', String(params.limit));
+    const suffix = query.size ? `?${query.toString()}` : '';
+    return request<TimelinePage>(`/v1/learners/${encodeURIComponent(learnerId)}/timeline${suffix}`, {
+      headers: { 'X-Dev-Learner-Id': learnerId },
+    });
+  },
   createLocalBackup(): Promise<{ format: string; archiveBase64: string }> { return request('/v1/local-backup'); },
   preflightLocalBackup(archiveBase64: string): Promise<{ archiveVersion: number; recordCount: number; fileCount: number; existingRecordCount: number; requiresReplaceConfirmation: boolean }> {
     return request('/v1/local-backup/preflight', { method: 'POST', body: JSON.stringify({ archiveBase64 }) });
@@ -870,8 +938,34 @@ export const learningApi = {
 };
 
 export type NextActionKind = 'learn' | 'ask' | 'quiz' | 'review';
-export type NextActionRecommendation = { id: string; actionKind: NextActionKind; title: string; rationale: string; conceptId?: string | null; conceptTitle?: string | null; effortMinutes: number; context: Record<string, string>; score: number };
-export type RecommendationSet = { id: string; sessionId: string; policyVersion: string; createdAt: string; recommendations: NextActionRecommendation[] };
+export type PedagogicalAction = 'teach' | 'check' | 'repair';
+export type NextActionRecommendation = {
+  id: string;
+  actionKind: NextActionKind;
+  title: string;
+  rationale: string;
+  conceptId?: string | null;
+  conceptTitle?: string | null;
+  effortMinutes: number;
+  context: Record<string, string>;
+  score: number;
+  pedagogicalAction?: PedagogicalAction | null;
+  whyCode?: string | null;
+  evidenceIds: string[];
+  inputDigest?: string | null;
+  isPrimary: boolean;
+};
+export type RecommendationSet = {
+  id: string;
+  sessionId: string;
+  policyVersion: string;
+  inputDigest?: string | null;
+  status: 'current' | 'superseded' | 'cancelled';
+  supersededBySetId?: string | null;
+  fulfilledEvidenceId?: string | null;
+  createdAt: string;
+  recommendations: NextActionRecommendation[];
+};
 
 export type ReviewConfidence = 'guessing' | 'somewhat' | 'confident' | 'very';
 export type ReviewDashboardConcept = {
@@ -897,4 +991,43 @@ export type ReviewSession = {
 };
 export type ReviewAskTutorPayload = {
   sessionId?: string | null; prompt: string; context: Record<string, unknown>; returnReviewSessionId: string;
+};
+
+export type ConceptStateExplanation = {
+  state: {
+    conceptId: string;
+    status: string;
+    version: number;
+    tentativeConfidence?: number | null;
+    uncertainty?: number | null;
+  };
+  admittedEvidence: {
+    id: string;
+    kind: string;
+    outcome: string;
+    condition: string;
+    score?: number | null;
+    createdAt?: string;
+  }[];
+  rationale: string;
+  review?: {
+    dueAt?: string | null;
+    dueReason?: string | null;
+    status?: string;
+    intervalDays?: number | null;
+  } | null;
+};
+
+export type TimelineEntry = {
+  id: string;
+  kind: string;
+  occurredAt: string;
+  conceptId?: string | null;
+  summary: string;
+  deepLink?: Record<string, string>;
+};
+
+export type TimelinePage = {
+  entries: TimelineEntry[];
+  nextCursor?: string | null;
 };

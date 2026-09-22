@@ -1,4 +1,4 @@
-import { request, type Gear, type LessonArtifact } from './api';
+import { LearningApiError, request, type Gear, type LessonArtifact, type SessionPositionUpdate, type SessionSnapshot } from './api';
 
 export type ChatMode = 'ask' | 'learn';
 export type Source = { spanId: string; title: string; text: string; pageIndex: number };
@@ -26,6 +26,52 @@ export type Quiz = {
 type Job = { id: string; status: 'queued' | 'running' | 'completed' | 'failed' | 'cancelled'; result: { quizId?: string; sessionId?: string; itemId?: string; attemptId?: string; noteDraftId?: string; noteId?: string; proposalId?: string; status?: string; heading?: string; applyKind?: string; skipped?: string; message?: string } | null };
 export const getJourney = (sid: string) => request<Journey>(`/v1/sessions/${sid}/journey`);
 export const getQuiz = (qid: string) => request<Quiz>(`/v1/quizzes/${qid}`);
+export const getSessionSnapshot = (sid: string) => request<SessionSnapshot>(`/v1/sessions/${encodeURIComponent(sid)}/snapshot`);
+export const updateSessionPosition = (sid: string, input: SessionPositionUpdate) =>
+  request<SessionSnapshot>(`/v1/sessions/${encodeURIComponent(sid)}/position`, { method: 'PATCH', body: JSON.stringify(input) });
+
+/** Stable URL for a learning session. localStorage is only a disposable hint. */
+export function sessionPath(sessionId: string | null | undefined): string {
+  return sessionId ? `/s/${encodeURIComponent(sessionId)}` : '/';
+}
+
+export function sessionIdFromPath(pathname: string): string | null {
+  const match = pathname.match(/^\/s\/([^/?#]+)/);
+  if (!match) return null;
+  try { return decodeURIComponent(match[1]); } catch { return match[1]; }
+}
+
+/** Prefer the route, then a disposable localStorage hint. */
+export function resolveSessionHint(pathname = typeof window === 'undefined' ? '/' : window.location.pathname): string | null {
+  const fromRoute = sessionIdFromPath(pathname);
+  if (fromRoute) return fromRoute;
+  try { return localStorage.getItem('forma-chat-session'); } catch { return null; }
+}
+
+export function rememberSessionHint(sessionId: string | null): void {
+  try {
+    if (sessionId) localStorage.setItem('forma-chat-session', sessionId);
+    else localStorage.removeItem('forma-chat-session');
+  } catch { /* Server snapshot remains authoritative. */ }
+}
+
+export function navigateToSession(sessionId: string | null, replace = false): void {
+  if (typeof window === 'undefined') return;
+  const next = sessionPath(sessionId);
+  if (window.location.pathname === next) return;
+  window.history[replace ? 'replaceState' : 'pushState']({ sessionId }, '', next);
+}
+
+export function isStaleSessionConflict(cause: unknown): boolean {
+  return cause instanceof LearningApiError && cause.status === 409 && cause.code === 'stale_session';
+}
+
+/** Snapshot-first restore: committed position comes from the server, Journey fills turn content. */
+export async function restoreSessionAuthority(sessionId: string): Promise<{ snapshot: SessionSnapshot; journey: Journey }> {
+  const snapshot = await getSessionSnapshot(sessionId);
+  const journey = await getJourney(sessionId);
+  return { snapshot, journey };
+}
 
 /** Persist the job ID before polling so reloads recover committed operations. */
 export async function workflow(path: string, body: unknown, scope: string): Promise<Job['result']> {

@@ -115,33 +115,45 @@ def test_study_note_link_and_insight_roundtrip(tmp_path):
 
 
 def test_turn_proposal_prepare_commit_accept(tmp_path):
+    """Learn tutoring turns write straight into the Notes Lesson (auto)."""
     store = _make_store(tmp_path)
     _make_session(store, "study_alice", "session_turn")
     _make_journey(store, "study_alice", "session_turn")
     service = _service(store)
     note = service.get_or_create_note("study_alice", "session_turn")
+    # Even if a learner previously left a Lesson in ask mode, turns still apply.
     service.set_tutor_updates("study_alice", note.id, "ask", note.revision)
     note = service.notes.get("study_alice", note.id)
     prepared = service.prepare("study_alice", "session_turn", ProposalCreate(origin="turn"))
     with store.transaction() as conn:
         result = service.commit(conn, "study_alice", prepared)
-    assert result["status"] == "proposed"
-    proposals = service.list_proposals("study_alice", "session_turn")
-    assert len(proposals) == 1 and proposals[0]["heading"] == "Chlorophyll"
-    accepted = service.accept("study_alice", proposals[0]["id"], expected_revision=note.revision)
-    assert accepted["status"] == "applied"
+    assert result["status"] == "applied"
     body = service.notes.get("study_alice", note.id).body
     assert "## Chlorophyll" in body and "Absorbs light." in body
     rows = service.list_sections("study_alice", note.id)
     assert rows[0]["owner_kind"] == "tutor"
-    # Second accept is rejected as closed.
-    from fastapi import HTTPException
-    try:
-        service.accept("study_alice", proposals[0]["id"])
-        raise AssertionError("expected closed")
-    except HTTPException as exc:
-        assert exc.status_code == 409
+    proposals = service.list_proposals("study_alice", "session_turn")
+    assert proposals and proposals[0]["status"] == "applied"
 
+
+def test_ask_mode_still_proposes_insights(tmp_path):
+    """Optional insight prompts can still ask before writing; Learn turns do not."""
+    store = _make_store(tmp_path)
+    _make_session(store, "study_alice", "session_ask_insight")
+    service = StudyNoteService(store, StubProvider({
+        "action": "add", "heading": "Query", "body": "What the token looks for.", "concept_title": None,
+        "match_heading": None,
+    }))
+    note = service.get_or_create_note("study_alice", "session_ask_insight")
+    service.set_tutor_updates("study_alice", note.id, "ask", note.revision)
+    note = service.notes.get("study_alice", note.id)
+    assert service.tutor_updates_mode(note) == "ask"
+    prepared = service.prepare("study_alice", "session_ask_insight", ProposalCreate(
+        origin="insight", source_text="Query represents what the token looks for.",
+        source_label="Attention"))
+    with store.transaction() as conn:
+        result = service.commit(conn, "study_alice", prepared)
+    assert result["status"] == "proposed"
 
 def test_turn_synthesis_can_skip_and_refine(tmp_path):
     store = _make_store(tmp_path)
@@ -188,13 +200,11 @@ def test_tombstone_blocks_readd(tmp_path):
     _make_journey(store, "study_alice", "session_tomb")
     service = _service(store)
     note = service.get_or_create_note("study_alice", "session_tomb")
-    service.set_tutor_updates("study_alice", note.id, "ask", note.revision)
-    note = service.notes.get("study_alice", note.id)
     prepared = service.prepare("study_alice", "session_tomb", ProposalCreate(origin="turn"))
     with store.transaction() as conn:
-        service.commit(conn, "study_alice", prepared)
-    pid = service.list_proposals("study_alice", "session_tomb")[0]["id"]
-    service.accept("study_alice", pid, expected_revision=note.revision)
+        first = service.commit(conn, "study_alice", prepared)
+    assert first["status"] == "applied"
+    pid = first["proposalId"]
     # Learner deletes the applied section by hand.
     current = service.notes.get("study_alice", note.id)
     pruned = current.body.replace("## Chlorophyll", "## Removed").replace("Absorbs light.", "gone.")
@@ -237,13 +247,11 @@ def test_user_edit_flips_section_to_shared(tmp_path):
     _make_journey(store, "study_alice", "session_shared")
     service = _service(store)
     note = service.get_or_create_note("study_alice", "session_shared")
-    service.set_tutor_updates("study_alice", note.id, "ask", note.revision)
-    note = service.notes.get("study_alice", note.id)
     prepared = service.prepare("study_alice", "session_shared", ProposalCreate(origin="turn"))
     with store.transaction() as conn:
-        service.commit(conn, "study_alice", prepared)
-    pid = service.list_proposals("study_alice", "session_shared")[0]["id"]
-    service.accept("study_alice", pid, expected_revision=note.revision)
+        first = service.commit(conn, "study_alice", prepared)
+    assert first["status"] == "applied"
+    pid = first["proposalId"]
     section_id = service.list_sections("study_alice", note.id)[0]["section_id"]
     # Learner rewrites the tutor section by hand.
     current = service.notes.get("study_alice", note.id)

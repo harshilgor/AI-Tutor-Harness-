@@ -16,6 +16,13 @@ def build_recommendation_router(store_provider):
     def interaction(recommendation_id: str, command: RecommendationInteractionCreate,
                     owner=Depends(material_owner), db=Depends(store_provider),
                     key: str | None = Header(default=None, alias="Idempotency-Key", max_length=200)):
-        RecommendationService(db).record_interaction(owner, recommendation_id, command.event_type, command.reason, key)
+        RecommendationService(db).record_interaction(
+            owner,
+            recommendation_id,
+            command.event_type,
+            command.reason,
+            key,
+            command.evidence_id,
+        )
 
     return router

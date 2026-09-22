@@ -79,15 +79,46 @@ Rejected evidence is retained with a reason and never enters the reducer.
 Unknown graphs, concept/version mismatches, invalid supersession, raw activity,
 and retried requests cannot mutate canonical state.
 
+## Session authority
+
+Committed learning position is server-owned. Clients may keep disposable
+localStorage hints and layout preferences, but restore must begin from
+`GET /v1/sessions/{id}/snapshot`. Stable routes use `/s/{sessionId}` so clearing
+browser storage does not erase the committed position.
+
+| Route | Contract |
+|---|---|
+| `GET /v1/sessions/{id}/snapshot` | Project Journey, generation, job, Quiz, Review, branch, and current recommendation pointers at one `authorityRevision` |
+| `PATCH /v1/sessions/{id}/position` | Revision-guarded pointer update; `409 stale_session` when `expectedRevision` diverges |
+
+Journey turn content retains its own revision. Generation SSE `REPLAY_EXPIRED`
+is a canonical-reconciliation signal: refetch snapshot + Journey rather than
+treat it as a hard failure.
+
+## Adaptive decisions
+
+Immutable `recommendation_sets` are the decision snapshots. Exactly one current
+primary pedagogical action exists per session/concept at a time. Sets carry
+status, supersession links, an evidence-sensitive `inputDigest`, and optional
+`fulfilledEvidenceId` when an outcome closes the decision. Interactions record
+impression/selection/dismissal/completion/failure without writing learner state.
+
+Read-only adaptive diagnostics live under
+`GET /v1/learners/{id}/adaptive/...` and never invent mastery percentages.
+
 ## Future ownership
 
 - **Assessment:** item blueprints, private rubrics, answer evaluation, transfer
   validation, similarity guards, and calibrated evaluator reliability. It may
-  propose evidence but must still call this admission boundary.
+  propose evidence but must still call this admission boundary. Shared Quiz and
+  Review paths converge on one validated presentation/exposure/challenge
+  lifecycle; legacy Review JSON without a private answer contract stays
+  fail-closed for MC.
 - **Knowledge tracing:** multi-observation estimators, forgetting calibration,
   prerequisite propagation, self-reported confidence, and empirical review
   intervals. It replaces the versioned reducer; it does not create another
-  state store.
+  state store. `concept_memory_states.next_review_at` remains the composition
+  clock; `review_schedules` mirrors evidence-linked history.
 - **Authentication:** provider sessions, account/tenant membership, server-side
   learner derivation, permissions for shared notes, retention/deletion policy,
   and hosted isolation. The development header must be removed, not promoted
