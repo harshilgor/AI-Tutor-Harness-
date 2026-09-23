@@ -3,10 +3,12 @@
 import { useEffect, useState } from 'react';
 import { AnimatePresence, motion, useReducedMotion } from 'motion/react';
 import { Button } from '@/components/ui/button';
-import { learningApi, request } from '@/lib/api';
+import { Badge } from '@/components/ui/badge';
+import { learningApi, request, type ModeTransitionSuggestion } from '@/lib/api';
 import { cancelWorkflow, getQuiz, workflow, waitForJob, type Quiz } from '@/lib/learning-workflows';
 import { AssessmentCard } from './assessment-card';
 import { openWorkspaceSource } from '@/lib/workspace-events';
+import { ModeTransitionCard } from './mode-transition-card';
 import styles from './quiz.module.css';
 
 export function QuizWorkspace({ sessionId, conceptId, inline = false, onReturn, onCreateRepairNote }: { sessionId?: string | null; conceptId?: string; inline?: boolean; onReturn?: () => void; onCreateRepairNote?: (attemptId: string) => void }) {
@@ -21,7 +23,33 @@ export function QuizWorkspace({ sessionId, conceptId, inline = false, onReturn, 
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState('');
   const [notice, setNotice] = useState('');
+  const [gapSuggestion, setGapSuggestion] = useState<ModeTransitionSuggestion | null>(null);
   const scope = inline ? `inline:${sessionId}:${conceptId || 'current'}` : 'quiz';
+
+  useEffect(() => {
+    let sid = sessionId;
+    try { sid ||= localStorage.getItem('forma-chat-session'); } catch { /* no session */ }
+    if (!sid || !quiz) return;
+    const currentConcept = conceptId || (quiz as unknown as { conceptIds?: string[] }).conceptIds?.[0];
+    if (!currentConcept) return;
+    const misses = quiz.attempts.filter(a => a.conceptId === currentConcept && (a.score === null || a.score < 0.5));
+    if (misses.length >= 2) {
+      let active = true;
+      void learningApi.getTransitionGap(sid, currentConcept, quiz.title, misses.length).then(res => {
+        if (active && res.suggestion) {
+          setGapSuggestion(res.suggestion);
+        }
+      }).catch(() => undefined);
+      return () => { active = false; };
+    } else {
+      const timer = window.setTimeout(() => {
+        setGapSuggestion(null);
+      }, 0);
+      return () => {
+        window.clearTimeout(timer);
+      };
+    }
+  }, [quiz?.attempts, sessionId, conceptId, quiz?.title]);
   useEffect(() => {
     let active = true;
     async function restore() {
@@ -76,7 +104,7 @@ export function QuizWorkspace({ sessionId, conceptId, inline = false, onReturn, 
       <h2>{inline ? 'One short check' : 'Quiz your recent learning'}</h2><p>Questions use the reference material attached to your conversation.</p>
       {!inline && <div className={styles.setup}><label>Questions<select value={count} onChange={e => setCount(Number(e.target.value))}>{[1, 3, 5, 10].map(n => <option key={n}>{n}</option>)}</select></label><label>Difficulty<select value={difficulty} onChange={e => setDifficulty(e.target.value)}>{['adaptive', 'foundational', 'standard', 'stretch'].map(d => <option key={d} value={d}>{d}</option>)}</select></label><label>Practice mode<select value={mode} onChange={e => setMode(e.target.value as typeof mode)}><option value="topic_drill">Topic drill</option><option value="timed_short_quiz">Timed short quiz</option></select></label>{mode === 'timed_short_quiz' && <label>Time<select value={duration} onChange={e => setDuration(Number(e.target.value))}>{[300,600,900,1200].map(seconds => <option key={seconds} value={seconds}>{seconds / 60} minutes</option>)}</select></label>}</div>}
       <Button disabled={busy} onClick={start}>Prepare quiz</Button>
-      {!inline && saved.map(q => <button className={styles.saved} key={q.id} disabled={busy} onClick={() => { setError(''); void getQuiz(q.id).then(setQuiz).catch(e => setError(e.message)); }}>{q.title}<span>{q.status.replaceAll('_', ' ')}</span></button>)}
+      {!inline && saved.map(q => <button className={styles.saved} key={q.id} disabled={busy} onClick={() => { setError(''); void getQuiz(q.id).then(setQuiz).catch(e => setError(e.message)); }}>{q.title}<Badge variant="secondary">{q.status.replaceAll('_', ' ')}</Badge></button>)}
     </div> : <>
       <div className={styles.progress}><strong>{quiz.title}</strong><span>{quiz.summary.attempted} of {quiz.count} answered</span><div className={styles.progressTrack} aria-hidden="true"><motion.span initial={false} animate={{ width: `${(quiz.summary.attempted / quiz.count) * 100}%` }} transition={reduceMotion ? { duration: 0 } : { duration: 0.24, ease: 'easeOut' }} /></div>{quiz.mode === 'timed_short_quiz' && <span aria-live="polite">Time left {secondsLeft} seconds</span>}</div>
       {timeExpired && <div className={styles.card} role="status"><h2>Time is up</h2><p>Your saved work is still available, but this timed quiz no longer accepts answers.</p></div>}
@@ -84,7 +112,28 @@ export function QuizWorkspace({ sessionId, conceptId, inline = false, onReturn, 
         onAnswer={answer => void act(`/quizzes/${quiz.id}/attempts`, { ...answer, presentationId: quiz.current!.id, expectedRevision: quiz.revision })}
         onHint={() => void act(`/presentations/${quiz.current!.id}/hints`, {})}
         onChallenge={reason => void act(`/attempts/${quiz.current!.attemptId}/challenges`, { reason })} onCreateRepairNote={onCreateRepairNote} onOpenSource={openWorkspaceSource} /></motion.div>}</AnimatePresence>
-      {quiz.status !== 'completed' && quiz.current?.attemptId && <Button disabled={busy} variant="outline" onClick={() => void act(`/quizzes/${quiz.id}/retry`, { expectedRevision: quiz.revision })}>Try again with help</Button>}
+      {gapSuggestion ? (
+        <ModeTransitionCard
+          suggestion={gapSuggestion}
+          disabled={busy}
+          onAccept={async () => {
+            let sid = sessionId;
+            try { sid ||= localStorage.getItem('forma-chat-session'); } catch { /* no session */ }
+            if (sid) {
+              void learningApi.recordTransitionInteraction(gapSuggestion.id, 'accept', 'learn', sid).catch(() => undefined);
+            }
+            onReturn?.();
+          }}
+          onDismiss={async () => {
+            let sid = sessionId;
+            try { sid ||= localStorage.getItem('forma-chat-session'); } catch { /* no session */ }
+            if (sid) {
+              void learningApi.recordTransitionInteraction(gapSuggestion.id, 'dismiss', 'learn', sid).catch(() => undefined);
+            }
+            setGapSuggestion(null);
+          }}
+        />
+      ) : null}
       {quiz.status === 'completed' ? <div className={styles.card}><h2>Session complete</h2><p>{quiz.summary.score === null ? 'No scored answers yet.' : `${quiz.summary.score}% across ${quiz.summary.evaluated} evaluated answers.`}</p><p>{quiz.summary.assisted} with help · {quiz.summary.skipped} skipped · {quiz.summary.dontKnow} marked “I don’t know”</p><p className={styles.meta}>Practice score, not mastery. Questions adapt, so scores are not rankings.</p><div className={styles.actions}><Button variant="outline" onClick={onReturn}>Return to Learn</Button><Button variant="outline" disabled={busy} onClick={() => void saveReviewChecklist()}>Save review checklist</Button><Button variant="ghost" onClick={() => { setQuiz(null); localStorage.removeItem(`forma-${scope}`); }}>New quiz</Button></div></div> : <div className={styles.actions}>
         {!timeExpired && (!quiz.current || quiz.current.attemptId) && <Button disabled={busy} onClick={() => void act(`/quizzes/${quiz.id}/next`, { expectedRevision: quiz.revision })}>{quiz.current ? 'Next question' : 'Generate first question'}</Button>}
         {!timeExpired && <Button disabled={busy} variant="ghost" onClick={() => void act(`/quizzes/${quiz.id}/${quiz.status === 'paused' ? 'resume' : 'pause'}`, { expectedRevision: quiz.revision })}>{quiz.status === 'paused' ? 'Resume quiz' : 'Pause'}</Button>}

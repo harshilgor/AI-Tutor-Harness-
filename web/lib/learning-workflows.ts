@@ -1,11 +1,11 @@
-import { LearningApiError, request, type Gear, type LessonArtifact, type SessionPositionUpdate, type SessionSnapshot } from './api';
+import { LearningApiError, request, type Gear, type LessonArtifact, type ModeTransitionSuggestion, type SessionPositionUpdate, type SessionSnapshot } from './api';
 
-export type ChatMode = 'ask' | 'learn';
+export type ChatMode = 'ask' | 'learn' | 'quiz';
 export type Source = { spanId: string; title: string; text: string; pageIndex: number };
 export type Journey = {
   id: string; sessionId: string; revision: number; mode: ChatMode; gear: Gear; goal: string;
   status: string; position: number; steps: { conceptId: string; title: string; objective: string }[];
-  turns: { question: string; lesson: LessonArtifact; sessionId: string; sources?: Source[]; noteContext?: { label: string; totalCharacters: number; notes: { noteId: string; title: string; revision: number; startOffset?: number | null; endOffset?: number | null }[] } }[];
+  turns: { question: string; lesson: LessonArtifact; sessionId: string; sources?: Source[]; noteContext?: { label: string; totalCharacters: number; notes: { noteId: string; title: string; revision: number; startOffset?: number | null; endOffset?: number | null }[] }; transitionSuggestion?: ModeTransitionSuggestion | null }[];
 };
 export type Presentation = {
   id: string; quizId: string; concept_id: string; kind: 'single' | 'multiple' | 'short'; stem: string;
@@ -88,12 +88,22 @@ export async function workflow(path: string, body: unknown, scope: string): Prom
 }
 export async function waitForJob(id: string, scope: string): Promise<Job['result']> {
   for (let i = 0; i < 600; i++) {
-    const job = await request<Job>(`/v1/learning-jobs/${id}`);
-    if (job.status === 'completed' || job.status === 'failed' || job.status === 'cancelled') {
-      try { localStorage.removeItem(`forma-job:${scope}`); localStorage.removeItem(`forma-command:${scope}`); } catch { /* Optional recovery pointer. */ }
-      if (job.status === 'failed') throw new Error(job.result?.message || 'Please try again.');
-      if (job.status === 'cancelled') throw new Error('Stopped. Your last completed step and saved answers are preserved.');
-      return job.result;
+    try {
+      const job = await request<Job>(`/v1/learning-jobs/${id}`);
+      if (job.status === 'completed' || job.status === 'failed' || job.status === 'cancelled') {
+        try { localStorage.removeItem(`forma-job:${scope}`); localStorage.removeItem(`forma-command:${scope}`); } catch { /* Optional recovery pointer. */ }
+        if (job.status === 'failed') throw new Error(job.result?.message || 'Please try again.');
+        if (job.status === 'cancelled') throw new Error('Stopped. Your last completed step and saved answers are preserved.');
+        return job.result;
+      }
+    } catch (cause) {
+      if (cause instanceof LearningApiError && cause.status === 404) {
+        // The job no longer exists on the server (completed & pruned, cancelled, or server restart).
+        // Clear the stale pointer and return cleanly without failing the conversation.
+        try { localStorage.removeItem(`forma-job:${scope}`); localStorage.removeItem(`forma-command:${scope}`); } catch { /* Optional recovery pointer. */ }
+        return null;
+      }
+      throw cause;
     }
     await new Promise(resolve => setTimeout(resolve, 1200));
   }

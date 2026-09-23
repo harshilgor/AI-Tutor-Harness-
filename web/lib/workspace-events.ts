@@ -11,8 +11,18 @@ export const WORKSPACE_NOTE_MENTION_EVENT = 'forma:workspace-note-mention';
 export const WORKSPACE_NOTE_REPLACE_DRAFT_EVENT = 'forma:workspace-note-replace-draft';
 export const WORKSPACE_SOURCE_OPEN_EVENT = 'forma:workspace-source-open';
 export const CHAT_SESSION_OPEN_EVENT = 'forma:chat-session-open';
+export const WORKSPACE_PANEL_TOGGLE_EVENT = 'forma:workspace-panel-toggle';
+export const WORKSPACE_PANEL_SET_COLLAPSED_EVENT = 'forma:workspace-panel-set-collapsed';
 
 export type WorkspaceNoteMention = { noteId: string; title: string; revision: number; startOffset: number; endOffset: number; excerpt: string };
+
+export function toggleWorkspacePanel(): void {
+  window.dispatchEvent(new CustomEvent(WORKSPACE_PANEL_TOGGLE_EVENT));
+}
+
+export function setWorkspacePanelCollapsed(collapsed: boolean): void {
+  window.dispatchEvent(new CustomEvent<boolean>(WORKSPACE_PANEL_SET_COLLAPSED_EVENT, { detail: collapsed }));
+}
 
 /**
  * An explicit, local UI boundary between a lesson and the learner-owned vault.

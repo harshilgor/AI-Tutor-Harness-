@@ -1,32 +1,34 @@
 "use client";
 
-import { useEffect, useRef, useState } from 'react';
+import { useCallback, useEffect, useRef, useState } from 'react';
 import { AnimatePresence, motion, useReducedMotion } from 'motion/react';
-import { LoaderCircle, FileText, Check, X } from 'lucide-react';
+import { LoaderCircle, FileText, Check, X, ArrowDown, GraduationCap } from 'lucide-react';
 import { Button } from '@/components/ui/button';
-import { LearningApiError, learningApi, type Gear, type LessonArtifact, type WorkspaceNoteSummary, type NoteDraft } from '@/lib/api';
+import { LearningApiError, learningApi, type Gear, type LessonArtifact, type ModeTransitionSuggestion, type WorkspaceNoteSummary, type NoteDraft } from '@/lib/api';
 import styles from './learn-chat.module.css';
 import { ChatComposer, type ChatAttachment, type ChatNoteMention } from './chat-composer';
 import { LessonReader } from './lesson-reader';
 import { RichContent } from './rich-content';
 import { materialRequest, materialCommand, prepareAttachment, type MaterialAnswer } from '@/lib/chat-materials';
 import { getJourney, workflow, waitForJob, resolveSessionHint, rememberSessionHint, navigateToSession, restoreSessionAuthority, isStaleSessionConflict, type ChatMode, type Journey } from '@/lib/learning-workflows';
-import { GenerationStream, type GenerationEvent } from '@/lib/generation-stream';
+import { GenerationStream, type GenerationEvent, type GenerationMode } from '@/lib/generation-stream';
 import { QuizWorkspace } from './quiz-workspace';
 import { NoteDraftCard } from './note-draft-card';
 import panelStyles from './study-note-panel.module.css';
 import { NextActionCards } from './next-action-cards';
 import { ConceptProgressWhy } from './concept-progress-why';
 import { openWorkspaceNote, openWorkspaceNoteDraft, openWorkspaceSource, WORKSPACE_NOTE_MENTION_EVENT, WORKSPACE_NOTE_REPLACE_DRAFT_EVENT, type WorkspaceNoteMention } from '@/lib/workspace-events';
+import { WebResearchActivity, type AgentActivity } from './web-research-activity';
+import { ModeTransitionCard, OriginBadge } from './mode-transition-card';
 
 type NoteContextReceipt = { label: string; notes: { noteId: string; title: string; revision: number; startOffset?: number | null; endOffset?: number | null }[]; totalCharacters: number };
 type ReplacementTarget = { noteId: string; title: string; revision: number; startOffset: number; endOffset: number };
 type StreamedBlock = { id: string; kind: string; heading: string; body: string; status: 'streaming' | 'completed' };
 type StreamedLesson = { id: string; blocks: StreamedBlock[]; status: 'streaming' | 'completed' };
-type Turn = { question: string; lesson?: LessonArtifact; answer?: MaterialAnswer; stream?: StreamedLesson; files?: string[]; sessionId?: string; noteContext?: NoteContextReceipt };
+type Turn = { question: string; lesson?: LessonArtifact; answer?: MaterialAnswer; stream?: StreamedLesson; files?: string[]; sessionId?: string; noteContext?: NoteContextReceipt; transitionSuggestion?: ModeTransitionSuggestion | null };
 type SelectedPassage = { blockId: string; selectedText: string; lessonId?: string; sessionId?: string };
 type SelectionPanel = { selection: SelectedPassage; blocks: StreamedBlock[]; status: 'preparing' | 'streaming' | 'completed' | 'error'; error?: string };
-type GenerationRecovery = { generationId: string; sessionId: string; mode: ChatMode; lastAppliedSequence: number; status: string };
+type GenerationRecovery = { generationId: string; sessionId: string; mode: GenerationMode; lastAppliedSequence: number; status: string };
 
 const GREETINGS = [
   'Hi, what do you want to learn today?',
@@ -64,13 +66,25 @@ function RotatingGreeting() {
   );
 }
 
-export function LearnChat({ onQuiz, onReview, initialPrompt, onInitialPromptConsumed, initialSessionId }: {
+export function LearnChat({
+  onQuiz,
+  onReview,
+  initialPrompt,
+  onInitialPromptConsumed,
+  initialSessionId,
+  courseId,
+  courseName,
+  onCourseClick,
+}: {
   onQuiz?: (sessionId: string, conceptId?: string) => void;
   onReview?: (sessionId: string, conceptId?: string) => void;
   initialPrompt?: string;
   onInitialPromptConsumed?: () => void;
   /** Route session id wins over disposable localStorage hints. */
   initialSessionId?: string | null;
+  courseId?: string | null;
+  courseName?: string | null;
+  onCourseClick?: (courseId: string) => void;
 }) {
   const reduceMotion = useReducedMotion();
   const [prompt, setPrompt] = useState('');
@@ -93,6 +107,59 @@ export function LearnChat({ onQuiz, onReview, initialPrompt, onInitialPromptCons
   const [selectionPanel, setSelectionPanel] = useState<SelectionPanel | null>(null);
   const [selectionFollowup, setSelectionFollowup] = useState('');
   const [appliedNote, setAppliedNote] = useState<{ heading: string; noteId: string; applyKind?: 'added' | 'refined' } | null>(null);
+  const [activity, setActivity] = useState<AgentActivity>(null);
+  const [dismissedSuggestions, setDismissedSuggestions] = useState<Set<string>>(new Set());
+  const [originBadge, setOriginBadge] = useState<string | null>(null);
+
+  async function handleAcceptTransition(suggestion: ModeTransitionSuggestion) {
+    const sid = sessionId || (typeof suggestion.context?.sessionId === 'string' ? suggestion.context.sessionId : null);
+    if (sid) {
+      void learningApi.recordTransitionInteraction(suggestion.id, 'accept', suggestion.targetMode, sid).catch(() => undefined);
+    }
+    setDismissedSuggestions(prev => new Set(prev).add(suggestion.id));
+
+    if (suggestion.targetMode === 'learn') {
+      setChatMode('learn');
+      if (suggestion.context?.originSummary) {
+        setOriginBadge(String(suggestion.context.originSummary));
+      }
+      if (sid) {
+        try {
+          const lessonNote = await learningApi.createStudyNote(sid);
+          openWorkspaceNote(lessonNote.noteId);
+        } catch { /* Living lesson note is best effort */ }
+
+        const seed = (typeof suggestion.context?.seedPrompt === 'string' ? suggestion.context.seedPrompt : '') ||
+          (typeof suggestion.context?.conceptTitle === 'string' ? `Teach me about ${suggestion.context.conceptTitle}` : '');
+        if (seed && !journey?.steps.length) {
+          setProgress('Planning your learning path…');
+          setBusy(true);
+          try {
+            await workflow(`/sessions/${sid}/journey`, { mode: 'learn', gear, message: seed, action: 'message', expectedRevision: journey?.revision || 1, noteContext }, 'chat');
+            const next = await getJourney(sid);
+            applyJourney(next);
+            if (next.status === 'proposed' && next.steps.length) {
+              await streamTurn({ action: 'start', message: '', question: 'Start learning' }, sid);
+            }
+          } finally {
+            setBusy(false);
+          }
+        }
+      }
+    } else if (suggestion.targetMode === 'quiz') {
+      if (sid) {
+        onQuiz?.(sid, typeof suggestion.context?.conceptId === 'string' ? suggestion.context.conceptId : undefined);
+      }
+    }
+  }
+
+  async function handleDismissTransition(suggestion: ModeTransitionSuggestion) {
+    const sid = sessionId || (typeof suggestion.context?.sessionId === 'string' ? suggestion.context.sessionId : null);
+    setDismissedSuggestions(prev => new Set(prev).add(suggestion.id));
+    if (sid) {
+      void learningApi.recordTransitionInteraction(suggestion.id, 'dismiss', suggestion.targetMode, sid).catch(() => undefined);
+    }
+  }
 
   useEffect(() => {
     if (!initialPrompt) return;
@@ -122,31 +189,79 @@ export function LearnChat({ onQuiz, onReview, initialPrompt, onInitialPromptCons
 
   async function announceApplied(result: { proposalId?: string; status?: string; heading?: string; noteId?: string; applyKind?: string } | null, sid: string) {
     if (result?.status !== 'applied') return;
-    const openLesson = (noteId: string, heading: string, applyKind: 'added' | 'refined') => {
+    const announce = (noteId: string, heading: string, applyKind: 'added' | 'refined') => {
       setAppliedNote({ heading, noteId, applyKind });
-      openWorkspaceNote(noteId);
     };
     if (result.heading && result.noteId) {
-      openLesson(result.noteId, result.heading, result.applyKind === 'refined' ? 'refined' : 'added');
+      announce(result.noteId, result.heading, result.applyKind === 'refined' ? 'refined' : 'added');
       return;
     }
     if (!result?.proposalId) return;
     try {
       const items = await learningApi.listNoteProposals(sid);
       const item = items.proposals.find(entry => entry.id === result.proposalId);
-      if (item) openLesson(item.noteId, item.heading, 'added');
+      if (item) announce(item.noteId, item.heading, 'added');
     } catch { /* The toast is optional; the Lesson still updated in Notes. */ }
   }
+  const autoOpenedSessions = useRef<Set<string>>(new Set());
   const scrollArea = useRef<HTMLDivElement | null>(null);
   const activeGeneration = useRef<GenerationStream | null>(null);
+  const activeSubmissionSessionId = useRef<string | null>(null);
+  const isNearBottomRef = useRef(true);
+  const isProgrammaticScrollRef = useRef(false);
+  const [hasNewContentBelow, setHasNewContentBelow] = useState(false);
+  const scrollRafRef = useRef<number | null>(null);
   const lesson = turns.at(-1)?.lesson || null;
   function rememberGeneration(value: GenerationRecovery | null) { try { if (value) localStorage.setItem('forma-generation', JSON.stringify(value)); else localStorage.removeItem('forma-generation'); } catch { /* Recovery remains in memory. */ } }
 
+  const checkIfNearBottom = useCallback(() => {
+    const el = scrollArea.current;
+    if (!el) return true;
+    const threshold = 120;
+    const distance = el.scrollHeight - el.scrollTop - el.clientHeight;
+    return distance <= threshold;
+  }, []);
+
+  const scrollToBottom = useCallback((smooth = true) => {
+    const el = scrollArea.current;
+    if (!el) return;
+    isProgrammaticScrollRef.current = true;
+    el.scrollTo({
+      top: el.scrollHeight,
+      behavior: smooth && !reduceMotion ? 'smooth' : 'auto',
+    });
+    window.requestAnimationFrame(() => {
+      window.requestAnimationFrame(() => {
+        isProgrammaticScrollRef.current = false;
+        isNearBottomRef.current = true;
+        setHasNewContentBelow(false);
+      });
+    });
+  }, [reduceMotion]);
+
   useEffect(() => {
-    const element = scrollArea.current;
-    if (!element) return;
-    element.scrollTo({ top: element.scrollHeight, behavior: turns.length > 1 ? 'smooth' : 'auto' });
-  }, [turns, busy]);
+    const el = scrollArea.current;
+    if (!el) return;
+    const onScroll = () => {
+      if (isProgrammaticScrollRef.current) return;
+      const nearBottom = checkIfNearBottom();
+      isNearBottomRef.current = nearBottom;
+      if (nearBottom) {
+        setHasNewContentBelow(false);
+      }
+    };
+    el.addEventListener('scroll', onScroll, { passive: true });
+    return () => el.removeEventListener('scroll', onScroll);
+  }, [checkIfNearBottom]);
+
+  // When turns length changes (new user question or assistant response added):
+  useEffect(() => {
+    if (isNearBottomRef.current) {
+      scrollToBottom(turns.length > 1);
+    } else if (streaming) {
+      setHasNewContentBelow(true);
+    }
+  }, [turns.length, streaming, scrollToBottom]);
 
   function applyJourney(next: Journey) { setJourney(next); setTurns(next.turns); setChatMode(next.mode); setGear(next.gear); }
   useEffect(() => {
@@ -155,6 +270,10 @@ export function LearnChat({ onQuiz, onReview, initialPrompt, onInitialPromptCons
       try {
         const sid = initialSessionId || resolveSessionHint();
         if (!sid) return;
+        if (activeSubmissionSessionId.current === sid) {
+          // Submission in flight for this session; skip restore to avoid race conditions.
+          return;
+        }
         setBusy(true); setSessionId(sid);
         rememberSessionHint(sid);
         navigateToSession(sid, true);
@@ -162,7 +281,13 @@ export function LearnChat({ onQuiz, onReview, initialPrompt, onInitialPromptCons
         if (pending) await waitForJob(pending, 'chat');
         // Snapshot-first: committed pointers come from the server even with cleared localStorage.
         const { journey: saved } = await restoreSessionAuthority(sid);
-        if (active) { applyJourney(saved); recallFiled(sid); }
+        if (active) {
+          applyJourney(saved);
+          recallFiled(sid);
+          if (saved.turns.length > 0) {
+            autoOpenedSessions.current.add(sid);
+          }
+        }
         if (active && saved.mode === 'learn') {
           try { await learningApi.createStudyNote(sid); } catch { /* Optional; teaching remains available. */ }
         }
@@ -194,7 +319,7 @@ export function LearnChat({ onQuiz, onReview, initialPrompt, onInitialPromptCons
           rememberGeneration(null); activeGeneration.current = null; setStreaming(false);
         }
       } catch (cause) {
-        if (!active) return;
+        if (!active || activeSubmissionSessionId.current === (initialSessionId || resolveSessionHint())) return;
         if (isStaleSessionConflict(cause)) {
           setError('This tab is out of date. Reloading the latest session…');
           try {
@@ -207,12 +332,18 @@ export function LearnChat({ onQuiz, onReview, initialPrompt, onInitialPromptCons
           rememberSessionHint(null);
           navigateToSession(null, true);
           setSessionId(null);
-          setError('That conversation is no longer available.');
+          if (initialSessionId) {
+            setError('That conversation is no longer available.');
+          }
           return;
         }
         setError(cause instanceof Error ? cause.message : 'Could not restore the conversation.');
       }
-      finally { if (active) setBusy(false); }
+      finally {
+        if (active && activeSubmissionSessionId.current !== (initialSessionId || resolveSessionHint())) {
+          setBusy(false);
+        }
+      }
     }
     void restore(); return () => { active = false; };
   }, [initialSessionId]);
@@ -303,7 +434,7 @@ export function LearnChat({ onQuiz, onReview, initialPrompt, onInitialPromptCons
       );
       if (!result || result.status === 'skipped' || (result as { skipped?: string }).skipped) return;
       if (result.status === 'applied') {
-        rememberFiled(sid, lessonId, { noteId: String(result.noteId || link.noteId), heading: String(result.heading || 'Lesson') });
+        rememberFiled(sid, lessonId, { noteId: String(result.noteId || link?.noteId || ''), heading: String(result.heading || 'Lesson') });
         await announceApplied(result, sid);
       }
     } catch {
@@ -329,6 +460,7 @@ export function LearnChat({ onQuiz, onReview, initialPrompt, onInitialPromptCons
       const next = await getJourney(sessionId);
       applyJourney(next);
       if (wasLearn) await fileNewestLearnLesson(next, sessionId);
+      scrollToBottom(true);
     } catch (cause) { setError(cause instanceof Error ? cause.message : 'Please try again.'); }
     finally { setBusy(false); }
   }
@@ -341,12 +473,49 @@ export function LearnChat({ onQuiz, onReview, initialPrompt, onInitialPromptCons
     let finalError = '';
     let streamId = '';
     let replayExpired = false;
-    setBusy(true); setStreaming(true); setError(''); setProgress('Preparing your lesson…');
+    setBusy(true); setStreaming(true); setError(''); setProgress('Preparing your lesson…'); setActivity(null);
     try {
-      await stream.start(sid, { mode: chatMode, gear, message: input.message, action: input.action, expectedRevision: journey?.revision || 1, noteContext }, {
+      await stream.start(sid, { mode: requestMode === 'learn' ? 'learn' : 'ask', gear, message: input.message, action: input.action, expectedRevision: journey?.revision || 1, noteContext }, {
         onEvent: (event: GenerationEvent) => {
-          if (event.type === 'generation.context_ready') { setProgress('Writing your lesson…'); return; }
+          if (event.type === 'tool.started' && event.data.tool === 'search_web_evidence') {
+            const query = typeof event.data.query === 'string' ? event.data.query : undefined;
+            setActivity({ type: 'web_search', status: 'searching', query, sourceCount: 0 });
+            return;
+          }
+          if (event.type === 'source.added') {
+            setActivity(current => {
+              if (!current || current.type !== 'web_search') return current;
+              return { ...current, sourceCount: current.sourceCount + 1 };
+            });
+            return;
+          }
+          if (event.type === 'tool.completed' && event.data.tool === 'search_web_evidence') {
+            const ok = event.data.ok !== false;
+            const count = typeof event.data.sourceCount === 'number' ? event.data.sourceCount : undefined;
+            setActivity(current => {
+              if (!current || current.type !== 'web_search') return current;
+              if (!ok) return { ...current, status: 'error' };
+              return { ...current, status: 'complete', sourceCount: count ?? current.sourceCount };
+            });
+            return;
+          }
+          if (event.type === 'generation.context_ready') {
+            setProgress('Writing your lesson…');
+            setActivity(current => {
+              if (current && current.type === 'web_search' && current.status !== 'error') {
+                return { type: 'synthesizing' };
+              }
+              return current;
+            });
+            return;
+          }
           if (event.type === 'lesson.block_started') {
+            setActivity(current => {
+              if (current && current.type === 'synthesizing') {
+                return { type: 'writing' };
+              }
+              return current;
+            });
             const block = event.data.block as { id?: string; kind?: string; heading?: string } | undefined;
             streamId = event.generationId;
             const nextBlock: StreamedBlock = { id: block?.id || `${event.generationId}-block`, kind: block?.kind || 'explanation', heading: block?.heading || 'Working through it', body: '', status: 'streaming' };
@@ -358,9 +527,26 @@ export function LearnChat({ onQuiz, onReview, initialPrompt, onInitialPromptCons
             return;
           }
           if (event.type === 'text.delta') {
+            setActivity(null);
             const text = typeof event.data.text === 'string' ? event.data.text : '';
             const blockId = String(event.data.blockId || '');
             setTurns(current => current.map((turn, index) => index === current.length - 1 && turn.stream ? { ...turn, stream: { ...turn.stream, blocks: turn.stream.blocks.map(block => block.id === blockId ? { ...block, body: block.body + text } : block) } } : turn));
+            if (isNearBottomRef.current) {
+              if (!scrollRafRef.current) {
+                scrollRafRef.current = window.requestAnimationFrame(() => {
+                  scrollRafRef.current = null;
+                  if (isNearBottomRef.current && scrollArea.current) {
+                    isProgrammaticScrollRef.current = true;
+                    scrollArea.current.scrollTop = scrollArea.current.scrollHeight;
+                    window.requestAnimationFrame(() => {
+                      isProgrammaticScrollRef.current = false;
+                    });
+                  }
+                });
+              }
+            } else {
+              setHasNewContentBelow(true);
+            }
             return;
           }
           if (event.type === 'lesson.block_completed') {
@@ -369,8 +555,17 @@ export function LearnChat({ onQuiz, onReview, initialPrompt, onInitialPromptCons
             return;
           }
           if (event.type === 'generation.error' && event.data.code === 'REPLAY_EXPIRED') replayExpired = true;
-          else if (event.type === 'generation.error') finalError = typeof event.data.message === 'string' ? event.data.message : 'The lesson could not be completed.';
-          if (event.type === 'generation.cancelled') finalError = 'Generation stopped. Your previous lessons are still saved.';
+          else if (event.type === 'generation.error') {
+            finalError = typeof event.data.message === 'string' ? event.data.message : 'The lesson could not be completed.';
+            setActivity(null);
+          }
+          if (event.type === 'generation.cancelled') {
+            finalError = 'Generation stopped. Your previous lessons are still saved.';
+            setActivity(null);
+          }
+          if (event.type === 'generation.completed') {
+            setActivity(null);
+          }
         },
         onReconnect: () => setProgress('Reconnecting to your lesson…'),
         onDescriptor: descriptor => rememberGeneration({ generationId: descriptor.id, sessionId: sid, mode: descriptor.mode, lastAppliedSequence: descriptor.sequence, status: descriptor.status }),
@@ -387,6 +582,7 @@ export function LearnChat({ onQuiz, onReview, initialPrompt, onInitialPromptCons
       setPrompt(''); setNoteMentions([]);
       if (requestMode === 'learn') void evolveLessonFromNewest(sid);
     } catch (cause) {
+      setActivity(null);
       if (isStaleSessionConflict(cause)) {
         try { applyJourney((await restoreSessionAuthority(sid)).journey); setError('This tab was out of date. Showing the latest committed lesson.'); }
         catch { setError('This tab is out of date. Reload to continue.'); }
@@ -395,7 +591,10 @@ export function LearnChat({ onQuiz, onReview, initialPrompt, onInitialPromptCons
         setError(cause instanceof Error ? cause.message : 'The lesson could not be completed.');
       }
     } finally {
-      activeGeneration.current = null; setStreaming(false); setBusy(false);
+      activeGeneration.current = null; setStreaming(false); setBusy(false); setActivity(null);
+      if (isNearBottomRef.current) {
+        scrollToBottom(true);
+      }
     }
   }
 
@@ -439,18 +638,24 @@ export function LearnChat({ onQuiz, onReview, initialPrompt, onInitialPromptCons
     const timeout = window.setTimeout(() => controller.abort(), 170000);
     try {
       setProgress(attachments.length ? 'Reading your attachments…' : 'Thinking about that…');
-      const currentSession = sessionId ? { id: sessionId } : await learningApi.createSession({ topic: text.slice(0, 200), goal: text.slice(0, 1000), gear });
+      const currentSession = sessionId ? { id: sessionId } : await learningApi.createSession({ topic: text.slice(0, 200), goal: text.slice(0, 1000), gear, courseId: courseId ?? undefined });
+      activeSubmissionSessionId.current = currentSession.id;
       if (!sessionId) setSessionId(currentSession.id);
       rememberSessionHint(currentSession.id);
       navigateToSession(currentSession.id, !sessionId);
       if (!sessionId) window.dispatchEvent(new CustomEvent('forma:chat-history-changed'));
+      scrollToBottom(true);
       // Learn always owns a Lesson in Notes first. Chat stays the place to go
       // deeper, quiz, and continue — the Lesson is the persistent study doc.
+      const isInitialLearnTurn = chatMode === 'learn' && (!sessionId || turns.length === 0 || !autoOpenedSessions.current.has(currentSession.id));
       if (chatMode === 'learn') {
         setProgress('Creating your lesson…');
         try {
           const lessonNote = await learningApi.createStudyNote(currentSession.id);
-          openWorkspaceNote(lessonNote.noteId);
+          if (isInitialLearnTurn) {
+            autoOpenedSessions.current.add(currentSession.id);
+            openWorkspaceNote(lessonNote.noteId);
+          }
         } catch {
           /* Teaching still proceeds; the server also ensures a Lesson exists. */
         }
@@ -485,14 +690,36 @@ export function LearnChat({ onQuiz, onReview, initialPrompt, onInitialPromptCons
       }
     } catch (cause) {
       setError(cause instanceof DOMException && cause.name === 'AbortError' ? 'This model is taking too long to respond. Try a shorter question or try again.' : cause instanceof Error ? cause.message : 'The lesson could not be completed. Please try again.');
-    } finally { window.clearTimeout(timeout); setBusy(false); }
+    } finally {
+      window.clearTimeout(timeout);
+      setBusy(false);
+      activeSubmissionSessionId.current = null;
+    }
   }
 
   return <div className={styles.chatShell}>
     <div ref={scrollArea} className={styles.chatScroll}>
     <div className={`${styles.page} ${turns.length ? styles.reading : styles.empty}`}>
+    {courseName ? (
+      <div className={styles.courseBadgeRow}>
+        <button
+          type="button"
+          className={styles.courseBadge}
+          onClick={() => courseId && onCourseClick?.(courseId)}
+          title={`Part of course: ${courseName}`}
+        >
+          <GraduationCap size={14} />
+        </button>
+      </div>
+    ) : null}
+    <AnimatePresence>
+      {originBadge ? (
+        <OriginBadge summary={originBadge} onDismiss={() => setOriginBadge(null)} />
+      ) : null}
+    </AnimatePresence>
     {!turns.length && !busy ? <RotatingGreeting /> : null}
-    {busy && !streaming ? <div className={styles.loading} role="status"><LoaderCircle className={styles.spinner} size={22} /><h2>{progress}</h2><p>{prompt}</p><span>A thoughtful answer takes a little time.</span></div> : null}
+    {!turns.length && busy && !streaming && !activity ? <div className={styles.loading} role="status"><LoaderCircle className={styles.spinner} size={22} /><h2>{progress}</h2><p>{prompt}</p><span>A thoughtful answer takes a little time.</span></div> : null}
+    {!turns.length && activity ? <AnimatePresence mode="wait">{activity && <WebResearchActivity activity={activity} />}</AnimatePresence> : null}
     {turns.map((turn, turnIndex) => <motion.div key={turn.lesson?.id || turn.stream?.id || `material-${turnIndex}`} className={styles.turn} initial={reduceMotion ? false : { opacity: 0, y: 12 }} animate={{ opacity: 1, y: 0 }} transition={{ duration: 0.2, ease: 'easeOut' }}>
       {!SYNTHETIC_QUESTIONS.has(turn.question) ? <div className={styles.userPrompt}><span>You</span><div><p>{turn.question}</p>{turn.files?.map(name => <div className={styles.sentFile} key={name}><FileText size={15} />{name}</div>)}</div></div> : null}
       <article aria-label="Learning lesson" className={styles.lessonArticle}>
@@ -502,8 +729,18 @@ export function LearnChat({ onQuiz, onReview, initialPrompt, onInitialPromptCons
         {turn.answer && <><p className={styles.hint}>{turn.answer.message}</p>{turn.answer.sources.length > 0 && <details className={styles.sources}><summary>{turn.answer.sources.length} passages from your materials</summary><p className={styles.hint}>Coverage is limited to these selected passages.</p>{turn.answer.sources.map(source => <button type="button" className={styles.sourceChip} key={source.spanId} onClick={() => openWorkspaceSource(source)}>{source.title} · Page {source.pageIndex + 1}</button>)}</details>}</>}
         {turn.noteContext?.notes.length ? <div className={styles.noteContextReceipt}><span>Learner note context · {turn.noteContext.totalCharacters} characters</span>{turn.noteContext.notes.map(note => <button type="button" key={note.noteId} onClick={() => openWorkspaceNote(note.noteId)}>@{note.title}</button>)}</div> : null}
         {noteDrafts.filter(draft => draft.sessionId === turn.sessionId).map(draft => <NoteDraftCard key={draft.id} draft={draft} onHandled={updated => setNoteDrafts(current => current.map(item => item.id === updated.id ? updated : item))} />)}
+        {turn.transitionSuggestion && !dismissedSuggestions.has(turn.transitionSuggestion.id) ? (
+          <ModeTransitionCard
+            suggestion={turn.transitionSuggestion}
+            disabled={busy}
+            onAccept={handleAcceptTransition}
+            onDismiss={handleDismissTransition}
+          />
+        ) : null}
       </article>
     </motion.div>)}
+    {turns.length > 0 && busy && !streaming && !activity ? <div className={styles.loading} role="status"><LoaderCircle className={styles.spinner} size={22} /><h2>{progress}</h2><p>{prompt}</p><span>A thoughtful answer takes a little time.</span></div> : null}
+    {turns.length > 0 && activity ? <AnimatePresence mode="wait">{activity && <WebResearchActivity activity={activity} />}</AnimatePresence> : null}
     {appliedNote ? <div className={panelStyles.updated} role="status"><Check size={14} /><span>Lesson updated in Notes · {appliedNote.applyKind === 'refined' ? 'Expanded' : 'Added'} “{appliedNote.heading}”</span><button type="button" onClick={() => openWorkspaceNote(appliedNote.noteId)}>Open lesson</button><button type="button" aria-label="Dismiss" onClick={() => setAppliedNote(null)}><X size={14} /></button></div> : null}
     {checking && sessionId && <QuizWorkspace key={`${sessionId}:${journey?.position || 0}`} inline sessionId={sessionId} conceptId={journey?.steps[journey.position]?.conceptId || lesson?.conceptId} onReturn={() => setChecking(false)} onCreateRepairNote={attemptId => void createQuizFeedbackDraft(attemptId)} />}
     {sessionId && turns.length > 0 && chatMode === 'learn' ? <NextActionCards sessionId={sessionId} enabled={!busy} refreshKey={`${journey?.revision || 0}:${checking ? 'checking' : 'ready'}`}
@@ -518,6 +755,29 @@ export function LearnChat({ onQuiz, onReview, initialPrompt, onInitialPromptCons
     {selectionPanel ? <aside className={styles.studyPanel} aria-label="Selected passage explanation"><div className={styles.panelHeader}><div><span>Selected passage</span><strong>A closer look</strong></div><Button variant="ghost" size="sm" onClick={() => setSelectionPanel(null)}>Close</Button></div><blockquote>{selectionPanel.selection.selectedText}</blockquote>{selectionPanel.blocks.map(block => <section key={block.id}><h3>{block.heading}</h3><RichContent body={block.body || '…'} /></section>)}{selectionPanel.status === 'preparing' ? <p className={styles.hint}>Preparing the explanation…</p> : null}{selectionPanel.error ? <p className={styles.error}>{selectionPanel.error}</p> : null}<form onSubmit={event => { event.preventDefault(); const text = selectionFollowup.trim(); if (text) { setSelectionFollowup(''); void explainSelection(selectionPanel.selection, text); } }}><label htmlFor="selection-followup" className="sr-only">Ask a follow-up about this passage</label><textarea id="selection-followup" rows={3} value={selectionFollowup} disabled={busy} placeholder="Ask a follow-up about this passage…" onChange={event => setSelectionFollowup(event.target.value)} /><div className={styles.lessonActions}>{selectionPanel.status === 'streaming' || selectionPanel.status === 'preparing' ? <Button type="button" variant="outline" onClick={() => void activeGeneration.current?.stop()}>Stop</Button> : <span /> }{selectionPanel.blocks.length > 0 ? <Button type="button" variant="outline" disabled={busy} onClick={() => void proposeInsight(selectionPanel.blocks.map(block => `${block.heading}\n${block.body}`).join('\n\n'), selectionPanel.selection.selectedText.slice(0, 120), selectionPanel.selection.sessionId || sessionId)}>Save insight</Button> : null}<Button type="submit" disabled={busy || !selectionFollowup.trim()}>Ask</Button></div></form></aside> : null}
     </div>
     </div>
-    <div className={styles.composerDock}><div className={styles.composerInner}><ChatComposer value={prompt} onChange={setPrompt} attachments={attachments} onAttachmentsChange={setAttachments} onSubmit={() => void submit()} onCancel={streaming ? () => void activeGeneration.current?.stop() : undefined} busy={busy} followup={turns.length > 0} gear={gear} onGearChange={setGear} mode={chatMode} onModeChange={setChatMode} noteMentions={noteMentions} onAddNoteMention={note => void addNoteMention(note)} onRemoveNoteMention={noteId => setNoteMentions(current => current.filter(note => note.noteId !== noteId))} onOpenNoteMention={openWorkspaceNote} /></div></div>
+    <AnimatePresence>
+      {hasNewContentBelow && streaming && (
+        <motion.button
+          type="button"
+          className={styles.newContentIndicator}
+          onClick={() => scrollToBottom(true)}
+          initial={reduceMotion ? { opacity: 0 } : { opacity: 0, y: 10, scale: 0.95 }}
+          animate={reduceMotion ? { opacity: 1 } : { opacity: 1, y: 0, scale: 1 }}
+          exit={reduceMotion ? { opacity: 0 } : { opacity: 0, y: 8, scale: 0.95 }}
+          transition={{ duration: 0.2, ease: 'easeOut' }}
+          aria-label="Scroll to newest content"
+        >
+          <ArrowDown size={14} aria-hidden="true" />
+          <span>New content</span>
+        </motion.button>
+      )}
+    </AnimatePresence>
+    <div className={styles.composerDock}><div className={styles.composerInner}><ChatComposer value={prompt} onChange={setPrompt} attachments={attachments} onAttachmentsChange={setAttachments} onSubmit={() => void submit()} onCancel={streaming ? () => void activeGeneration.current?.stop() : undefined} busy={busy} followup={turns.length > 0} gear={gear} onGearChange={setGear} mode={chatMode} onModeChange={mode => {
+      if (mode === 'quiz') {
+        if (sessionId) onQuiz?.(sessionId);
+        return;
+      }
+      setChatMode(mode);
+    }} noteMentions={noteMentions} onAddNoteMention={note => void addNoteMention(note)} onRemoveNoteMention={noteId => setNoteMentions(current => current.filter(note => note.noteId !== noteId))} onOpenNoteMention={openWorkspaceNote} /></div></div>
   </div>;
 }

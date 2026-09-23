@@ -77,8 +77,9 @@ class SessionCreate(ApiModel):
     gear: TeachingGear = TeachingGear.guided
     domain_pack_id: str | None = Field(default=None, max_length=120)
     domain_pack_version: int | None = Field(default=None, ge=1)
+    course_id: str | None = Field(default=None, max_length=160)
 
-    @field_validator("graph_id", "scope_id", "topic", "goal", "learner_id")
+    @field_validator("graph_id", "scope_id", "topic", "goal", "learner_id", "course_id")
     @classmethod
     def normalize_optional_text(cls, value: str | None) -> str | None:
         if value is None:
@@ -96,6 +97,7 @@ class LearningSession(ApiModel):
     # and graph contract.
     domain_pack_id: str | None = None
     domain_pack_version: int | None = None
+    course_id: str | None = None
     goal: str | None = None
     title: str | None = Field(default=None, max_length=120)
     current_concept_id: str | None = None
@@ -315,5 +317,12 @@ class SessionSummary(ApiModel):
     id: str
     title: str
     goal: str | None = None
+    course_id: str | None = None
     updated_at: datetime
     turn_count: int = Field(default=0, ge=0)
+
+    def to_summary_dict(self) -> dict[str, Any]:
+        data = self.model_dump(mode="json", by_alias=True)
+        if self.course_id is None:
+            data.pop("courseId", None)
+        return data

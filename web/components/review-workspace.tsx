@@ -64,15 +64,21 @@ export function ReviewWorkspace({
     }
   }, [session]);
 
-  useEffect(() => { void loadDash(); }, []);
+  useEffect(() => {
+    const timer = window.setTimeout(() => { void loadDash(); }, 0);
+    return () => window.clearTimeout(timer);
+  }, [loadDash]);
 
   useEffect(() => {
     if (!resumeSessionId) return;
-    setBusy(true);
-    void learningApi.getReviewSession(resumeSessionId)
-      .then(setSession)
-      .catch(cause => setError(cause instanceof Error ? cause.message : 'Could not resume review.'))
-      .finally(() => setBusy(false));
+    const timer = window.setTimeout(() => {
+      setBusy(true);
+      void learningApi.getReviewSession(resumeSessionId)
+        .then(setSession)
+        .catch(cause => setError(cause instanceof Error ? cause.message : 'Could not resume review.'))
+        .finally(() => setBusy(false));
+    }, 0);
+    return () => window.clearTimeout(timer);
   }, [resumeSessionId]);
 
   const current: ReviewItem | null = session

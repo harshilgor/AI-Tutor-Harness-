@@ -1,6 +1,6 @@
 "use client";
 
-import { useState } from 'react';
+import { useEffect, useState } from 'react';
 import { ArrowLeft, Bell, CircleHelp, Database, Gauge, KeyRound, Settings2 } from 'lucide-react';
 import { ProviderSettings } from './provider-settings';
 import { UsageSettings } from './usage-settings';
@@ -34,7 +34,11 @@ export function SettingsPage({ category, onCategoryChange, onBack }: {
   onCategoryChange: (category: SettingsCategory) => void;
   onBack: () => void;
 }) {
-  const [desktop] = useState<boolean>(() => hasDesktopPreferences());
+  const [desktop, setDesktop] = useState(false);
+  useEffect(() => {
+    const timer = window.setTimeout(() => setDesktop(hasDesktopPreferences()), 0);
+    return () => window.clearTimeout(timer);
+  }, []);
 
   return (
     <div className={styles.page}>

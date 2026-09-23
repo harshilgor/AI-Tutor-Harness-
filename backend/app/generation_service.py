@@ -128,12 +128,21 @@ class GenerationManager:
             self.records.transition(generation_id, "preparing")
             self.records.update_metrics(generation_id, {"startedAt": started_at, "queueSeconds": max(0, started_at - self.records.get(owner, generation_id)["createdAt"])})
             await self.buffer.append(generation_id, "generation.started", {"mode": request.mode, "gear": request.gear.value})
+            loop = asyncio.get_running_loop()
+
+            def emit_event(event_type: str, data: dict | None = None):
+                asyncio.run_coroutine_threadsafe(
+                    self.buffer.append(generation_id, event_type, data),
+                    loop,
+                )
+
             prepared = await asyncio.to_thread(
                 JourneyService(self.store, self.provider).prepare_stream,
                 owner,
                 request_session_id := self.records.get(owner, generation_id)["session"],
                 request,
                 lambda: self.records.cancelled(generation_id),
+                emit_event,
             )
             context_ready_at = time.time()
             self.records.update_metrics(generation_id, {"contextReadyAt": context_ready_at, "contextBuildSeconds": context_ready_at - started_at})

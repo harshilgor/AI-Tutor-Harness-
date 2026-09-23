@@ -57,6 +57,7 @@ from .workspace_note_context import WorkspaceNoteContextService
 from .workspace_note_service import WorkspaceNoteError
 from .recommendation_routes import build_recommendation_router
 from .backup_routes import build_backup_router
+from .course_routes import build_course_router
 from .study_note_routes import build_study_note_router
 from .usage_routes import build_usage_router
 from .review_routes import build_review_router
@@ -107,6 +108,7 @@ app.include_router(build_study_note_router(get_store, lambda: lesson_provider))
 app.include_router(build_usage_router(get_store))
 app.include_router(build_review_router(get_store, lambda: lesson_provider))
 app.include_router(build_session_snapshot_router(get_store))
+app.include_router(build_course_router(get_store, lambda: lesson_provider))
 
 
 @app.get("/health")
@@ -224,7 +226,11 @@ def _event(db: Store, action_id: str, sequence: int, event_type: str, data: dict
 
 
 @app.post("/v1/sessions", response_model=LearningSession, status_code=status.HTTP_201_CREATED)
-def create_learning_session(request: SessionCreate, db: Store = Depends(get_store)) -> LearningSession:
+def create_learning_session(
+    request: SessionCreate,
+    owner: str = Depends(material_owner),
+    db: Store = Depends(get_store),
+) -> LearningSession:
     """Pin a learning session to a graph revision for resumable actions."""
     graph_id = request.graph_id
     if request.domain_pack_id:
@@ -252,9 +258,11 @@ def create_learning_session(request: SessionCreate, db: Store = Depends(get_stor
     graph = db.get_graph(graph_id)
     if graph is None:
         raise HTTPException(status_code=404, detail={"code": "graph_not_found", "message": "Graph does not exist."})
+    effective_learner_id = request.learner_id if request.learner_id != "local" else owner
     session = LearningSession(
         id=f"session_{uuid4().hex}",
-        learner_id=request.learner_id,
+        learner_id=effective_learner_id,
+        course_id=request.course_id,
         graph_id=graph.id,
         graph_revision=request.graph_revision or graph.version,
         domain_pack_id=request.domain_pack_id,
@@ -315,9 +323,10 @@ def list_chat_sessions(
                 id=item.id,
                 title=item.title or short_title(item.goal),
                 goal=item.goal,
+                course_id=item.course_id,
                 updated_at=item.updated_at,
                 turn_count=db.journey_turn_count(owner, item.id),
-            ).model_dump(mode="json", by_alias=True)
+            ).to_summary_dict()
             for item in sessions
         ],
         "total": total,

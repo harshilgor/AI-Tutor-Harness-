@@ -8,7 +8,19 @@ from .assessment_models import JourneyCommand
 from .session_models import ApiModel
 
 GenerationStatus = Literal["queued", "preparing", "streaming", "finalizing", "completed", "cancel_requested", "cancelled", "failed", "interrupted"]
-GenerationEventType = Literal["generation.started", "generation.context_ready", "text.delta", "lesson.block_started", "lesson.block_completed", "source.added", "generation.completed", "generation.cancelled", "generation.error"]
+GenerationEventType = Literal[
+    "generation.started",
+    "generation.context_ready",
+    "text.delta",
+    "lesson.block_started",
+    "lesson.block_completed",
+    "source.added",
+    "tool.started",
+    "tool.completed",
+    "generation.completed",
+    "generation.cancelled",
+    "generation.error",
+]
 
 
 class GenerationRequest(JourneyCommand):

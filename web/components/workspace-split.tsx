@@ -1,13 +1,29 @@
 "use client";
 
-import { useEffect, useRef, useState, type CSSProperties, type ReactNode } from 'react';
+import { createContext, useContext, useEffect, useMemo, useRef, useState, type CSSProperties, type ReactNode } from 'react';
 import { AnimatePresence, motion, useReducedMotion } from 'motion/react';
 import { WorkspacePanel, type WorkspacePanelLayout } from './workspace-panel';
-import { WORKSPACE_NOTE_OPEN_EVENT, WORKSPACE_NOTE_SEED_EVENT, WORKSPACE_SOURCE_OPEN_EVENT, type WorkspaceNoteSeed } from '@/lib/workspace-events';
+import { WORKSPACE_NOTE_OPEN_EVENT, WORKSPACE_NOTE_SEED_EVENT, WORKSPACE_PANEL_SET_COLLAPSED_EVENT, WORKSPACE_PANEL_TOGGLE_EVENT, WORKSPACE_SOURCE_OPEN_EVENT, type WorkspaceNoteSeed } from '@/lib/workspace-events';
 import styles from './workspace-split.module.css';
 
 const STORAGE_KEY = 'forma-workspace-panel-v1';
-const DEFAULT_LAYOUT: WorkspacePanelLayout = { width: 50, collapsed: false, tabs: ['notes'], activeTab: 'notes' };
+const DEFAULT_LAYOUT: WorkspacePanelLayout = { width: 50, collapsed: true, tabs: ['notes'], activeTab: 'notes' };
+
+export type WorkspaceSplitContextValue = {
+  collapsed: boolean;
+  setCollapsed: (collapsed: boolean) => void;
+  toggle: () => void;
+};
+
+export const WorkspaceSplitContext = createContext<WorkspaceSplitContextValue>({
+  collapsed: true,
+  setCollapsed: () => {},
+  toggle: () => {},
+});
+
+export function useWorkspacePanel() {
+  return useContext(WorkspaceSplitContext);
+}
 
 function validLayout(value: unknown): value is WorkspacePanelLayout {
   if (!value || typeof value !== 'object') return false;
@@ -61,6 +77,21 @@ export function WorkspaceSplit({ children, quizSessionId, quizConceptId, hidePan
     return () => window.removeEventListener(WORKSPACE_SOURCE_OPEN_EVENT, receiveSource);
   }, []);
   useEffect(() => {
+    const handleToggle = () => {
+      setLayout(current => ({ ...current, collapsed: !current.collapsed }));
+    };
+    const handleSet = (event: Event) => {
+      const collapsed = (event as CustomEvent<boolean>).detail;
+      setLayout(current => ({ ...current, collapsed }));
+    };
+    window.addEventListener(WORKSPACE_PANEL_TOGGLE_EVENT, handleToggle);
+    window.addEventListener(WORKSPACE_PANEL_SET_COLLAPSED_EVENT, handleSet);
+    return () => {
+      window.removeEventListener(WORKSPACE_PANEL_TOGGLE_EVENT, handleToggle);
+      window.removeEventListener(WORKSPACE_PANEL_SET_COLLAPSED_EVENT, handleSet);
+    };
+  }, []);
+  useEffect(() => {
     const timer = window.setTimeout(() => {
       try {
         const stored = JSON.parse(localStorage.getItem(STORAGE_KEY) || 'null');
@@ -87,18 +118,35 @@ export function WorkspaceSplit({ children, quizSessionId, quizConceptId, hidePan
     return () => { window.removeEventListener('pointermove', resize); window.removeEventListener('pointerup', stop); };
   }, []);
 
+  const contextValue = useMemo<WorkspaceSplitContextValue>(() => ({
+    collapsed: layout.collapsed,
+    setCollapsed: (collapsed: boolean) => setLayout(current => ({ ...current, collapsed })),
+    toggle: () => setLayout(current => ({ ...current, collapsed: !current.collapsed })),
+  }), [layout.collapsed]);
+
   const panel = <WorkspacePanel quizSessionId={quizSessionId} quizConceptId={quizConceptId} layout={layout} onLayoutChange={setLayout} noteSeed={noteSeed} noteToOpen={noteToOpen} sourceToOpen={sourceToOpen} onNoteSeedConsumed={id => setNoteSeed(current => current?.id === id ? null : current)} onNoteOpenConsumed={noteId => setNoteToOpen(current => current === noteId ? null : current)}
     onCollapse={() => setLayout(current => ({ ...current, collapsed: true }))}
     onExpand={() => setLayout(current => ({ ...current, collapsed: false }))} />;
 
-  if (hidePanel) return <div className={styles.notesGroup}>{children}</div>;
-  if (compact) return <div className={styles.compact}><div className={styles.compactMain}>{children}</div><AnimatePresence initial={false}>{!layout.collapsed && <motion.div key="workspace-panel" className={styles.panel} initial={reduceMotion ? false : { opacity: 0, x: 24 }} animate={{ opacity: 1, x: 0 }} exit={reduceMotion ? undefined : { opacity: 0, x: 24 }} transition={{ duration: 0.22, ease: 'easeOut' }}>{panel}</motion.div>}</AnimatePresence>{layout.collapsed && panel}</div>;
+  if (hidePanel) return <WorkspaceSplitContext.Provider value={contextValue}><div className={styles.notesGroup}>{children}</div></WorkspaceSplitContext.Provider>;
+  if (compact) return <WorkspaceSplitContext.Provider value={contextValue}><div className={styles.compact}><div className={styles.compactMain}>{children}</div><AnimatePresence initial={false}>{!layout.collapsed && <motion.div key="workspace-panel" className={styles.panel} initial={reduceMotion ? false : { opacity: 0, x: 24 }} animate={{ opacity: 1, x: 0 }} exit={reduceMotion ? undefined : { opacity: 0, x: 24 }} transition={{ duration: 0.2, ease: 'easeOut' }}>{panel}</motion.div>}</AnimatePresence></div></WorkspaceSplitContext.Provider>;
 
-  return <div ref={groupRef} className={styles.group}>
-    <div className={styles.main}>{children}</div>
-    <div className={styles.handle} role="separator" aria-orientation="vertical" aria-label="Resize workspace panel" aria-valuemin={30} aria-valuemax={70} aria-valuenow={layout.width} tabIndex={0}
-      onPointerDown={event => { event.preventDefault(); resizing.current = true; }}
-      onKeyDown={event => { if (event.key === 'ArrowLeft' || event.key === 'ArrowRight') { event.preventDefault(); const change = event.key === 'ArrowLeft' ? 2 : -2; setLayout(current => ({ ...current, collapsed: false, width: Math.max(30, Math.min(70, current.width + change)) })); } }} />
-    <motion.div className={`${styles.panel} ${layout.collapsed ? styles.collapsed : ''}`} style={{ '--workspace-panel-width': layout.collapsed ? '42px' : `${layout.width}%` } as CSSProperties} animate={reduceMotion ? undefined : { opacity: layout.collapsed ? 0.92 : 1 }} transition={{ duration: 0.18 }}>{panel}</motion.div>
-  </div>;
+  return <WorkspaceSplitContext.Provider value={contextValue}>
+    <div ref={groupRef} className={styles.group}>
+      <div className={styles.main}>{children}</div>
+      {!layout.collapsed && (
+        <div className={styles.handle} role="separator" aria-orientation="vertical" aria-label="Resize workspace panel" aria-valuemin={30} aria-valuemax={70} aria-valuenow={layout.width} tabIndex={0}
+          onPointerDown={event => { event.preventDefault(); resizing.current = true; }}
+          onKeyDown={event => { if (event.key === 'ArrowLeft' || event.key === 'ArrowRight') { event.preventDefault(); const change = event.key === 'ArrowLeft' ? 2 : -2; setLayout(current => ({ ...current, collapsed: false, width: Math.max(30, Math.min(70, current.width + change)) })); } }} />
+      )}
+      <motion.div
+        className={`${styles.panel} ${layout.collapsed ? styles.collapsed : ''}`}
+        style={{ '--workspace-panel-width': layout.collapsed ? '0px' : `${layout.width}%` } as CSSProperties}
+        animate={reduceMotion ? undefined : { opacity: layout.collapsed ? 0 : 1 }}
+        transition={{ duration: 0.2, ease: 'easeOut' }}
+      >
+        {panel}
+      </motion.div>
+    </div>
+  </WorkspaceSplitContext.Provider>;
 }

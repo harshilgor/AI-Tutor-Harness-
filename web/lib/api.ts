@@ -147,12 +147,45 @@ export type LessonArtifact = {
   generatedBy?: string;
 };
 
+export type ModeTransitionSuggestion = {
+  id: string;
+  sourceMode: 'ask' | 'learn' | 'quiz';
+  targetMode: 'ask' | 'learn' | 'quiz';
+  reason: string;
+  confidence: number;
+  title: string;
+  description: string;
+  actionLabel: string;
+  dismissLabel: string;
+  context: {
+    sessionId?: string;
+    conceptId?: string;
+    conceptTitle?: string;
+    courseId?: string;
+    seedPrompt?: string;
+    originSummary?: string;
+    questionCount?: number;
+    consecutiveMisses?: number;
+    [key: string]: unknown;
+  };
+  createdAt: string;
+};
+
+export type ModeTransitionInteraction = {
+  suggestionId: string;
+  action: 'accept' | 'dismiss';
+  targetMode: 'ask' | 'learn' | 'quiz';
+  sessionId?: string;
+  reason?: string;
+};
+
 export type LearningSession = {
   id: string;
   graphId: string;
   graphRevision: number;
   goal?: string | null;
   title?: string | null;
+  courseId?: string | null;
   currentConceptId?: string | null;
   currentLessonId?: string | null;
   stateVersion: number;
@@ -435,6 +468,7 @@ export type ChatSessionSummary = {
   id: string;
   title: string;
   goal?: string | null;
+  courseId?: string | null;
   updatedAt: string;
   turnCount: number;
 };
@@ -628,8 +662,18 @@ export const learningApi = {
     return request<KnowledgeGraph>(`/v1/graphs/${encodeURIComponent(graphId)}${suffix}`, { signal: params.signal });
   },
 
-  createSession(input: { graphId?: string; topic?: string; gear?: Gear; graphRevision?: number; goal?: string }): Promise<LearningSession> {
-    return request<LearningSession>('/v1/sessions', { method: 'POST', body: JSON.stringify(input) });
+  createSession(input: { graphId?: string; topic?: string; gear?: Gear; graphRevision?: number; goal?: string; courseId?: string | null }): Promise<LearningSession> {
+    return request<LearningSession>('/v1/sessions', {
+      method: 'POST',
+      body: JSON.stringify({
+        ...input,
+        course_id: input.courseId ?? undefined,
+      }),
+    });
+  },
+
+  getSession(sessionId: string): Promise<LearningSession> {
+    return request<LearningSession>(`/v1/sessions/${encodeURIComponent(sessionId)}`);
   },
 
   getSessionSnapshot(sessionId: string): Promise<SessionSnapshot> {
@@ -657,6 +701,26 @@ export const learningApi = {
 
   deleteChatSession(sessionId: string): Promise<void> {
     return request<void>(`/v1/sessions/${encodeURIComponent(sessionId)}`, { method: 'DELETE' });
+  },
+
+  recordTransitionInteraction(suggestionId: string, action: 'accept' | 'dismiss', targetMode: 'ask' | 'learn' | 'quiz', sessionId?: string): Promise<{ status: string }> {
+    return request<{ status: string }>(`/v1/sessions/${encodeURIComponent(sessionId || 'default')}/transition-interaction`, {
+      method: 'POST',
+      body: JSON.stringify({
+        suggestionId,
+        action,
+        targetMode,
+      }),
+    });
+  },
+
+  getTransitionGap(sessionId: string, conceptId: string, conceptTitle: string, consecutiveMisses = 2): Promise<{ suggestion: ModeTransitionSuggestion | null }> {
+    const params = new URLSearchParams({
+      concept_id: conceptId,
+      concept_title: conceptTitle,
+      consecutive_misses: String(consecutiveMisses),
+    });
+    return request<{ suggestion: ModeTransitionSuggestion | null }>(`/v1/sessions/${encodeURIComponent(sessionId)}/transition-gap?${params.toString()}`);
   },
 
   getProviderSettings(): Promise<ProviderSettingsStatus> {
@@ -935,6 +999,135 @@ export const learningApi = {
   restoreLocalBackup(archiveBase64: string, confirmReplace: boolean): Promise<{ restored: number; files: number }> {
     return request('/v1/local-backup/restore', { method: 'POST', body: JSON.stringify({ archiveBase64, confirmReplace }) });
   },
+  listCourses(params: { includeArchived?: boolean } = {}): Promise<CourseSummary[]> {
+    const query = new URLSearchParams();
+    if (params.includeArchived) query.set('include_archived', 'true');
+    const suffix = query.size ? `?${query.toString()}` : '';
+    return request<CourseSummary[]>(`/v1/courses${suffix}`);
+  },
+  createCourse(input: CourseCreateInput): Promise<CoursePublic> {
+    return request<CoursePublic>('/v1/courses', {
+      method: 'POST',
+      body: JSON.stringify(input),
+    });
+  },
+  getCourse(courseId: string): Promise<CoursePublic> {
+    return request<CoursePublic>(`/v1/courses/${encodeURIComponent(courseId)}`);
+  },
+  updateCourse(courseId: string, input: CourseUpdateInput): Promise<CoursePublic> {
+    return request<CoursePublic>(`/v1/courses/${encodeURIComponent(courseId)}`, {
+      method: 'PATCH',
+      body: JSON.stringify(input),
+    });
+  },
+  deleteCourse(courseId: string): Promise<void> {
+    return request<void>(`/v1/courses/${encodeURIComponent(courseId)}`, {
+      method: 'DELETE',
+    });
+  },
+  listCourseSessions(courseId: string, params: { limit?: number; offset?: number } = {}): Promise<{ sessions: ChatSessionSummary[]; total: number }> {
+    const query = new URLSearchParams();
+    if (params.limit !== undefined) query.set('limit', String(params.limit));
+    if (params.offset !== undefined) query.set('offset', String(params.offset));
+    const suffix = query.size ? `?${query.toString()}` : '';
+    return request<{ sessions: ChatSessionSummary[]; total: number }>(`/v1/courses/${encodeURIComponent(courseId)}/sessions${suffix}`);
+  },
+  listCourseNotes(courseId: string): Promise<{ notes: WorkspaceNoteSummary[]; total: number }> {
+    return request<{ notes: WorkspaceNoteSummary[]; total: number }>(`/v1/courses/${encodeURIComponent(courseId)}/notes`);
+  },
+  getCourseRoadmap(courseId: string): Promise<CourseRoadmapNode[]> {
+    return request<CourseRoadmapNode[]>(`/v1/courses/${encodeURIComponent(courseId)}/roadmap`);
+  },
+  generateCourseRoadmap(courseId: string, input?: { prompt?: string; replaceExisting?: boolean }): Promise<CourseRoadmapNode[]> {
+    return request<CourseRoadmapNode[]>(`/v1/courses/${encodeURIComponent(courseId)}/roadmap/generate`, {
+      method: 'POST',
+      body: JSON.stringify(input || {}),
+    });
+  },
+  addRoadmapNode(courseId: string, input: { title: string; phase: string; conceptId?: string | null }): Promise<CourseRoadmapNode> {
+    return request<CourseRoadmapNode>(`/v1/courses/${encodeURIComponent(courseId)}/roadmap/nodes`, {
+      method: 'POST',
+      body: JSON.stringify(input),
+    });
+  },
+  updateRoadmapNode(courseId: string, nodeId: string, input: Partial<Pick<CourseRoadmapNode, 'title' | 'phase' | 'conceptId' | 'status' | 'orderIndex'>> | 'planned' | 'in_progress' | 'completed' | 'needs_review'): Promise<CourseRoadmapNode> {
+    const body = typeof input === 'string' ? { status: input } : input;
+    return request<CourseRoadmapNode>(`/v1/courses/${encodeURIComponent(courseId)}/roadmap/${encodeURIComponent(nodeId)}`, {
+      method: 'PATCH',
+      body: JSON.stringify(body),
+    });
+  },
+  deleteRoadmapNode(courseId: string, nodeId: string): Promise<void> {
+    return request<void>(`/v1/courses/${encodeURIComponent(courseId)}/roadmap/${encodeURIComponent(nodeId)}`, {
+      method: 'DELETE',
+    });
+  },
+  reorderRoadmapNodes(courseId: string, nodeIds: string[]): Promise<CourseRoadmapNode[]> {
+    return request<CourseRoadmapNode[]>(`/v1/courses/${encodeURIComponent(courseId)}/roadmap/reorder`, {
+      method: 'POST',
+      body: JSON.stringify({ nodeIds }),
+    });
+  },
+  evaluateCourseProgression(courseId: string): Promise<{
+    courseId: string;
+    nodesUpdated: number;
+    completedCount: number;
+    totalCount: number;
+    dueReviewCount: number;
+    roadmap: CourseRoadmapNode[];
+  }> {
+    return request(`/v1/courses/${encodeURIComponent(courseId)}/roadmap/evaluate`, {
+      method: 'POST',
+    });
+  },
+  listCourseMaterials(courseId: string): Promise<{ materials: CourseMaterial[]; total: number }> {
+    return request<{ materials: CourseMaterial[]; total: number }>(`/v1/courses/${encodeURIComponent(courseId)}/materials`);
+  },
+  addCourseTextMaterial(courseId: string, input: { title: string; text: string; role?: 'reference' | 'textbook' | 'lecture_notes' }): Promise<CourseMaterial> {
+    return request<CourseMaterial>(`/v1/courses/${encodeURIComponent(courseId)}/materials/text`, {
+      method: 'POST',
+      body: JSON.stringify(input),
+    });
+  },
+  async uploadCourseMaterial(courseId: string, file: File, role: 'reference' | 'textbook' | 'lecture_notes' = 'reference'): Promise<CourseMaterial> {
+    if (file.size > 50 * 1024 * 1024) throw new Error('File exceeds 50 MB limit.');
+    const lower = file.name.toLowerCase();
+    const mediaType = lower.endsWith('.pdf')
+      ? 'application/pdf'
+      : lower.endsWith('.md')
+      ? 'text/markdown'
+      : lower.endsWith('.png')
+      ? 'image/png'
+      : lower.match(/\.jpe?g$/)
+      ? 'image/jpeg'
+      : lower.endsWith('.webp')
+      ? 'image/webp'
+      : lower.endsWith('.gif')
+      ? 'image/gif'
+      : 'text/plain';
+
+    const item = await request<{ materialId: string; versionId: string; uploadPath: string }>(
+      '/v1/materials',
+      {
+        method: 'POST',
+        body: JSON.stringify({ title: file.name, mediaType, byteCount: file.size, role, courseId }),
+      }
+    );
+    await fetch(`${apiBaseUrl()}${item.uploadPath}`, {
+      method: 'PUT',
+      headers: { 'Content-Type': mediaType },
+      body: file,
+    });
+    return request<CourseMaterial>(`/v1/materials/${encodeURIComponent(item.materialId)}`);
+  },
+  detachCourseMaterial(courseId: string, materialId: string): Promise<void> {
+    return request<void>(`/v1/courses/${encodeURIComponent(courseId)}/materials/${encodeURIComponent(materialId)}`, {
+      method: 'DELETE',
+    });
+  },
+  getMaterialBlocks(versionId: string): Promise<{ blocks: Array<{ id?: string; spanId?: string; title?: string; pageIndex: number; text: string }> }> {
+    return request(`/v1/material-versions/${encodeURIComponent(versionId)}/blocks`);
+  },
 };
 
 export type NextActionKind = 'learn' | 'ask' | 'quiz' | 'review';
@@ -1031,3 +1224,85 @@ export type TimelinePage = {
   entries: TimelineEntry[];
   nextCursor?: string | null;
 };
+
+export type CourseTeachingPreferences = {
+  depth: 'introductory' | 'standard' | 'deep';
+  pace: 'brisk' | 'steady' | 'thorough';
+  mathLevel: 'minimal' | 'standard' | 'rigorous';
+  visualEmphasis: boolean;
+  codeExamples: boolean;
+  firstPrinciples: boolean;
+};
+
+export type CourseReminderPreferences = {
+  enabled: boolean;
+  days: string[];
+  time: string;
+  targetMinutes: number;
+};
+
+export type CourseRoadmapNode = {
+  id: string;
+  courseId: string;
+  phase: string;
+  conceptId?: string | null;
+  title: string;
+  status: 'planned' | 'in_progress' | 'completed' | 'needs_review';
+  orderIndex: number;
+  createdAt: string;
+};
+
+export type CourseMaterial = {
+  id: string;
+  title: string;
+  role: 'reference' | 'textbook' | 'lecture_notes' | 'sample_paper' | 'answer_key';
+  courseId?: string | null;
+  versionId: string;
+  status: 'uploaded' | 'queued' | 'running' | 'ready' | 'partially_ready' | 'failed' | 'needs_attention';
+  mediaType: string;
+  byteCount: number;
+  jobId?: string | null;
+  issues?: { message: string }[];
+};
+
+export type CourseSummary = {
+  id: string;
+  name: string;
+  goal: string;
+  sessionCount: number;
+  noteCount: number;
+  materialCount: number;
+  dueReviewCount: number;
+  roadmapProgress: number;
+  updatedAt: string;
+  archivedAt?: string | null;
+};
+
+export type CoursePublic = {
+  id: string;
+  name: string;
+  goal: string;
+  teachingPreferences: CourseTeachingPreferences;
+  reminderPreferences: CourseReminderPreferences;
+  roadmap: CourseRoadmapNode[];
+  summary: CourseSummary;
+  createdAt: string;
+  updatedAt: string;
+  archivedAt?: string | null;
+};
+
+export type CourseCreateInput = {
+  name: string;
+  goal: string;
+  teachingPreferences?: Partial<CourseTeachingPreferences>;
+  reminderPreferences?: Partial<CourseReminderPreferences>;
+};
+
+export type CourseUpdateInput = {
+  name?: string;
+  goal?: string;
+  teachingPreferences?: Partial<CourseTeachingPreferences>;
+  reminderPreferences?: Partial<CourseReminderPreferences>;
+  archived?: boolean;
+};
+

@@ -481,3 +481,61 @@ def test_provider_timeout_does_not_claim_retrieval(web_env):
     )
     assert result.retrieval_occurred is False
     assert result.state in {ToolCallState.timed_out, ToolCallState.response_completed} or result.error_code == "timeout"
+
+
+def test_tool_loop_emits_lifecycle_events(web_env):
+    store, clock = web_env
+    service = _service(store, clock)
+
+    class MockProposalProvider:
+        def __init__(self):
+            self.calls = 0
+
+        def complete_json(self, prompt: str, max_tokens: int = 4000, *, allow_text: bool = False):
+            self.calls += 1
+            if self.calls == 1:
+                return {
+                    "action": "tool_calls",
+                    "toolCalls": [
+                        {
+                            "name": "search_web_evidence",
+                            "arguments": {
+                                "query": "uncertainty definition",
+                                "intent": "definition",
+                            },
+                            "idempotencyKey": "idem-search-1",
+                        }
+                    ],
+                }
+            return {"action": "answer", "toolCalls": []}
+
+    events = []
+
+    def on_event(ev_type, data):
+        events.append((ev_type, data))
+
+    loop = ToolLoopOrchestrator(service)
+    bundle, results = loop.run(
+        provider=MockProposalProvider(),
+        auth=_auth(),
+        learner_message="What is uncertainty?",
+        source_policy="general",
+        learner_requested_external=True,
+        on_event=on_event,
+    )
+
+    assert len(results) == 1
+    assert results[0].ok is True
+    event_types = [e[0] for e in events]
+    assert "tool.started" in event_types
+    assert "source.added" in event_types
+    assert "tool.completed" in event_types
+
+    started = next(e[1] for e in events if e[0] == "tool.started")
+    assert started["tool"] == "search_web_evidence"
+    assert started["query"] == "uncertainty definition"
+
+    completed = next(e[1] for e in events if e[0] == "tool.completed")
+    assert completed["tool"] == "search_web_evidence"
+    assert completed["sourceCount"] > 0
+    assert completed["ok"] is True

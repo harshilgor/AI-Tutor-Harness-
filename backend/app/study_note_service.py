@@ -114,6 +114,9 @@ class StudyNoteService:
             title = "Study notes"
         # Auto-apply by default so Learn writes the Lesson into Notes while
         # chat stays for teaching, quizzes, and follow-ups.
+        frontmatter = {"study_note": True, "session_ids": [sid], "tutor_updates": "auto"}
+        if session.course_id:
+            frontmatter["course_id"] = session.course_id
         return self.notes.create(
             owner,
             WorkspaceNoteCreate(
@@ -125,7 +128,7 @@ class StudyNoteService:
                     "and durable ideas are added here as you go. "
                     "Your own writing is never rewritten.\n"
                 ),
-                frontmatter={"study_note": True, "session_ids": [sid], "tutor_updates": "auto"},
+                frontmatter=frontmatter,
             ),
         )
 

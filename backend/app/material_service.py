@@ -54,10 +54,17 @@ class MaterialService:
 
     def create(self, owner, request):
         mid, vid = uid("mat"), uid("matver")
+        course_id = getattr(request, "course_id", None)
         with self.store.transaction() as c:
-            c.execute(text("INSERT INTO materials(id,owner_id,title,role,deleted) VALUES(:id,:owner,:title,:role,false)"), {"id": mid, "owner": owner, "title": request.title, "role": request.role})
-            c.execute(text("INSERT INTO material_versions(id,material_id,version,object_key,media_type,byte_count,status,payload) VALUES(:id,:mid,1,:key,:media,:size,'uploaded',:payload)"), {"id": vid, "mid": mid, "key": uid("object"), "media": request.media_type, "size": request.byte_count, "payload": encoded({"issues": [], "parser": "text-v1"})})
-        return {"materialId": mid, "versionId": vid, "uploadPath": f"/v1/materials/{mid}/versions/{vid}/content", "status": "uploaded"}
+            c.execute(
+                text("INSERT INTO materials(id,owner_id,title,role,deleted,course_id) VALUES(:id,:owner,:title,:role,false,:course_id)"),
+                {"id": mid, "owner": owner, "title": request.title, "role": request.role, "course_id": course_id},
+            )
+            c.execute(
+                text("INSERT INTO material_versions(id,material_id,version,object_key,media_type,byte_count,status,payload) VALUES(:id,:mid,1,:key,:media,:size,'uploaded',:payload)"),
+                {"id": vid, "mid": mid, "key": uid("object"), "media": request.media_type, "size": request.byte_count, "payload": encoded({"issues": [], "parser": "text-v1"})},
+            )
+        return {"materialId": mid, "versionId": vid, "uploadPath": f"/v1/materials/{mid}/versions/{vid}/content", "status": "uploaded", "courseId": course_id}
 
     def upload(self, owner, mid, vid, content):
         v = self.version(owner, vid)
@@ -110,12 +117,20 @@ class MaterialService:
                 problem("material_not_found", "Material is not available", 404)
             v = self.version(owner, rows[0], c)
             job = c.execute(text("SELECT id,status,payload FROM material_jobs WHERE target_id=:id AND kind='ingest'"), {"id": v["id"]}).mappings().first()
+            mat_row = c.execute(text("SELECT course_id FROM materials WHERE id=:id"), {"id": mid}).mappings().first()
+            course_id = mat_row["course_id"] if mat_row else None
         payload = json.loads(v["payload"])
-        return {"id": mid, "title": v["title"], "role": v["role"], "versionId": v["id"], "status": v["status"], "mediaType": v["media_type"], "byteCount": v["byte_count"], "jobId": job["id"] if job else None, **payload}
+        return {"id": mid, "title": v["title"], "role": v["role"], "courseId": course_id, "versionId": v["id"], "status": v["status"], "mediaType": v["media_type"], "byteCount": v["byte_count"], "jobId": job["id"] if job else None, **payload}
 
-    def list(self, owner):
+    def list(self, owner, course_id: str | None = None):
         with self.store.engine.connect() as c:
-            ids = c.execute(text("SELECT id FROM materials WHERE owner_id=:owner AND deleted=false"), {"owner": owner}).scalars().all()
+            query = "SELECT id FROM materials WHERE owner_id=:owner AND deleted=false"
+            params = {"owner": owner}
+            if course_id is not None:
+                query += " AND course_id=:course_id"
+                params["course_id"] = course_id
+            query += " ORDER BY id DESC"
+            ids = c.execute(text(query), params).scalars().all()
         return [self.details(owner, mid) for mid in ids]
 
     def session(self, owner, sid):
@@ -133,9 +148,21 @@ class MaterialService:
         return {"versionId": vid, "sessionId": sid}
 
     def attachments(self, owner, sid):
-        self.session(owner, sid)
+        session = self.session(owner, sid)
         with self.store.engine.connect() as c:
-            ids = c.execute(text("SELECT a.version_id FROM material_attachments a JOIN material_versions v ON v.id=a.version_id JOIN materials m ON m.id=v.material_id WHERE a.session_id=:sid AND m.owner_id=:owner AND m.deleted=false"), {"sid": sid, "owner": owner}).scalars().all()
+            ids = set(c.execute(text("SELECT a.version_id FROM material_attachments a JOIN material_versions v ON v.id=a.version_id JOIN materials m ON m.id=v.material_id WHERE a.session_id=:sid AND m.owner_id=:owner AND m.deleted=false"), {"sid": sid, "owner": owner}).scalars().all())
+            # If session belongs to a course, automatically include ready versions of materials belonging to that course
+            if getattr(session, "course_id", None):
+                course_vids = c.execute(
+                    text(
+                        "SELECT v.id FROM material_versions v "
+                        "JOIN materials m ON m.id=v.material_id "
+                        "WHERE m.course_id=:cid AND m.owner_id=:owner AND m.deleted=false "
+                        "AND v.status IN ('ready', 'partially_ready')"
+                    ),
+                    {"cid": session.course_id, "owner": owner},
+                ).scalars().all()
+                ids.update(course_vids)
         return list(ids)
 
     def image_context(self, owner, sid, *, max_images=4, byte_budget=20 * 1024 * 1024):

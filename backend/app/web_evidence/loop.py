@@ -41,6 +41,7 @@ class ToolLoopOrchestrator:
         learner_requested_external: bool = False,
         cancelled: bool = False,
         cancel_check=None,
+        on_event=None,
     ) -> tuple[EvidenceBundle, list[ToolExecutionResult]]:
         """Run up to max_tool_rounds of propose→validate→execute, then return the bundle.
 
@@ -109,10 +110,16 @@ class ToolLoopOrchestrator:
                     break
                 if call.name not in TOOL_CATALOG:
                     continue
+                call_args = call.arguments if isinstance(call.arguments, dict) else {}
+                if on_event and call.name == "search_web_evidence":
+                    on_event("tool.started", {
+                        "tool": "search_web_evidence",
+                        "query": call_args.get("query", ""),
+                    })
                 result = execute_tool_call(
                     self.service,
                     tool_name=call.name,
-                    arguments=call.arguments if isinstance(call.arguments, dict) else {},
+                    arguments=call_args,
                     auth=auth,
                     response_bundle_id=bundle_id,
                     idempotency_key=call.idempotency_key or f"{bundle_id}:{round_index}:{call.name}:{uid('idem')}",
@@ -120,6 +127,22 @@ class ToolLoopOrchestrator:
                     cancelled=cancelled or bool(cancel_check and cancel_check()),
                 )
                 results.append(result)
+                if on_event and call.name == "search_web_evidence":
+                    if result.ok and result.evidence:
+                        for packet in result.evidence:
+                            on_event("source.added", {
+                                "spanId": packet.alias,
+                                "title": packet.title,
+                                "url": packet.canonical_url,
+                                "domain": packet.domain,
+                                "sourceKind": "web",
+                            })
+                    on_event("tool.completed", {
+                        "tool": "search_web_evidence",
+                        "sourceCount": len(result.evidence) if result.ok else 0,
+                        "ok": result.ok,
+                        "error": result.error_code if not result.ok else None,
+                    })
                 context_blob["retrievedEvidence"] = self.service.tutor_facing_payload(
                     self.service.build_bundle(auth, bundle_id, source_policy=source_policy)
                 )
@@ -141,6 +164,7 @@ def maybe_run_tool_loop(
     materials_insufficient: bool = False,
     request_id: str | None = None,
     cancel_check=None,
+    on_event=None,
 ) -> EvidenceBundle | None:
     """Feature-gated helper used by journey prep. Returns None when disabled."""
     config = load_web_evidence_config()
@@ -176,5 +200,6 @@ def maybe_run_tool_loop(
         learner_requested_external=learner_requested_external,
         cancelled=bool(cancel_check and cancel_check()),
         cancel_check=cancel_check,
+        on_event=on_event,
     )
     return bundle

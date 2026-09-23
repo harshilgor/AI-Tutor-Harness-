@@ -253,6 +253,7 @@ class WorkspaceNoteService:
             temporary_path.unlink(missing_ok=True)
 
     def _upsert_index(self, record: WorkspaceNoteRecord, content_hash: str | None = None) -> None:
+        course_id = (record.frontmatter or {}).get("course_id") or (record.frontmatter or {}).get("courseId")
         index_values = {
             "id": record.id,
             "learner_id": record.learner_id,
@@ -262,6 +263,7 @@ class WorkspaceNoteService:
             "frontmatter_json": self._index_payload(record.frontmatter),
             "search_text": f"{record.title}\n{record.body}",
             "content_hash": content_hash or self._file_hash(write_frontmatter(record.frontmatter, record.body)),
+            "course_id": course_id,
             "created_at": record.created_at,
             "updated_at": record.updated_at,
         }
@@ -269,14 +271,15 @@ class WorkspaceNoteService:
             result = connection.execute(text("""
                 UPDATE workspace_notes SET relative_path=:relative_path, title=:title, revision=:revision,
                 frontmatter_json=:frontmatter_json, search_text=:search_text, content_hash=:content_hash,
+                course_id=:course_id,
                 created_at=:created_at, updated_at=:updated_at WHERE id=:id AND learner_id=:learner_id
             """), index_values)
             if not result.rowcount:
                 connection.execute(text("""
                     INSERT INTO workspace_notes(id, learner_id, relative_path, title, revision, frontmatter_json,
-                                                search_text, content_hash, created_at, updated_at)
+                                                search_text, content_hash, course_id, created_at, updated_at)
                     VALUES (:id, :learner_id, :relative_path, :title, :revision, :frontmatter_json,
-                            :search_text, :content_hash, :created_at, :updated_at)
+                            :search_text, :content_hash, :course_id, :created_at, :updated_at)
                 """), index_values)
             self._sync_link_index(connection, record)
 

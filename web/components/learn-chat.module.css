@@ -129,4 +129,75 @@ does not read as a solid white empty slab. */
   .composerDock{padding:8px 16px 12px}
   .composer{padding:12px 14px;border-radius:18px}
   .greeting{font-size:18px}
+  .newContentIndicator{bottom:calc(var(--composer-clearance, 140px) - 10px);font-size:12px;padding:7px 12px}
+}
+
+.newContentIndicator {
+  position: absolute;
+  bottom: calc(var(--composer-clearance, 140px) - 20px);
+  left: 50%;
+  transform: translateX(-50%);
+  z-index: 10;
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 8px 15px;
+  border-radius: 999px;
+  border: 1px solid #d2d7cd;
+  background: #ffffff;
+  color: #333a30;
+  font-size: 13px;
+  font-weight: 550;
+  box-shadow: 0 4px 20px rgba(0, 0, 0, 0.08), 0 1px 3px rgba(0, 0, 0, 0.05);
+  cursor: pointer;
+  pointer-events: auto;
+  user-select: none;
+  transition: background 0.15s ease, border-color 0.15s ease, box-shadow 0.15s ease;
+}
+
+.newContentIndicator:hover {
+  background: #f7f8f5;
+  border-color: #b8bfb0;
+  box-shadow: 0 6px 24px rgba(0, 0, 0, 0.12), 0 2px 5px rgba(0, 0, 0, 0.06);
+}
+
+.newContentIndicator:focus-visible {
+  outline: none;
+  border-color: var(--focus-border, #4a6344);
+  box-shadow: 0 0 0 3px var(--focus-ring, rgba(74, 99, 68, 0.2));
+}
+
+.newContentIndicator svg {
+  color: #4a6344;
+  flex-shrink: 0;
+}
+
+.courseBadgeRow {
+  display: flex;
+  align-items: center;
+  margin: 0 0 16px;
+}
+
+.courseBadge {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 4px 10px;
+  border-radius: 999px;
+  border: 1px solid #dbe1d6;
+  background: #f4f6f1;
+  color: #3d4a37;
+  font-size: 12px;
+  font-weight: 550;
+  cursor: pointer;
+  transition: background 0.15s ease, border-color 0.15s ease;
+}
+
+.courseBadge:hover {
+  background: #e8ece3;
+  border-color: #cbd3c5;
+}
+
+.courseBadge svg {
+  color: #4a6344;
 }

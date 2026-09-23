@@ -61,7 +61,7 @@ def build_material_router(store_provider, provider_getter=lambda: None):
     @router.post("/materials/text", status_code=201)
     def add_text(request: TextMaterial, tasks: BackgroundTasks, owner=Depends(material_owner), svc=Depends(service)):
         content = request.text.encode("utf-8")
-        item = svc.create(owner, UploadRequest(title=request.title, media_type="text/plain", byte_count=len(content), role=request.role))
+        item = svc.create(owner, UploadRequest(title=request.title, media_type="text/plain", byte_count=len(content), role=request.role, course_id=request.course_id))
         result = svc.upload(owner, item["materialId"], item["versionId"], content)
         tasks.add_task(svc.process_one)
         return result
@@ -69,9 +69,11 @@ def build_material_router(store_provider, provider_getter=lambda: None):
     @router.post("/sessions/{sid}/url-materials", status_code=201)
     def add_url(sid: str, request: UrlMaterialRequest, owner=Depends(material_owner), svc=Depends(service)):
         from .url_ingestion import fetch_public_page
+        session = svc.session(owner, sid)
+        course_id = getattr(session, "course_id", None)
         page = fetch_public_page(request.url)
         content = page["text"].encode("utf-8")
-        item = svc.create(owner, UploadRequest(title=page["title"], media_type="text/plain", byte_count=len(content), role="reference"))
+        item = svc.create(owner, UploadRequest(title=page["title"], media_type="text/plain", byte_count=len(content), role="reference", course_id=course_id))
         svc.upload(owner, item["materialId"], item["versionId"], content)
         for _ in range(20):
             svc.process_one()
@@ -92,8 +94,8 @@ def build_material_router(store_provider, provider_getter=lambda: None):
         return result
 
     @router.get("/materials")
-    def listing(owner=Depends(material_owner), svc=Depends(service)):
-        return {"materials": svc.list(owner)}
+    def listing(course_id: str | None = None, owner=Depends(material_owner), svc=Depends(service)):
+        return {"materials": svc.list(owner, course_id=course_id)}
 
     @router.get("/materials/{mid}")
     def detail(mid: str, owner=Depends(material_owner), svc=Depends(service)):

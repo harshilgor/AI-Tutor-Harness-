@@ -12,6 +12,8 @@ from .note_draft_models import CreateNoteDraft, NoteDraftReplaceCommand
 from .note_draft_service import NoteDraftService
 from .study_note_models import ProposalCreate
 from .study_note_service import StudyNoteService
+from .mode_transition_models import ModeTransitionInteraction
+from .mode_transition_service import ModeTransitionService
 
 
 def run_job(store, provider, job_id):
@@ -102,6 +104,26 @@ def build_learning_router(store_provider, provider_getter):
     def journey(sid: str, command: JourneyCommand, tasks: BackgroundTasks, owner=Depends(material_owner), db=Depends(store_provider), key: str = Header(alias="Idempotency-Key", min_length=1, max_length=200)):
         MaterialService(db).session(owner, sid)
         return enqueue(tasks, db, owner, sid, "journey", command.model_dump(mode="json"), key)
+
+    @router.post("/sessions/{sid}/transition-interaction")
+    def transition_interaction(sid: str, interaction: ModeTransitionInteraction, owner=Depends(material_owner), db=Depends(store_provider)):
+        MaterialService(db).session(owner, sid)
+        interaction.session_id = sid
+        ModeTransitionService(db).record_interaction(owner, interaction)
+        return {"status": "ok"}
+
+    @router.get("/sessions/{sid}/transition-gap")
+    def transition_gap(sid: str, concept_id: str, concept_title: str, consecutive_misses: int = 2, owner=Depends(material_owner), db=Depends(store_provider)):
+        session = MaterialService(db).session(owner, sid)
+        suggestion = ModeTransitionService(db).evaluate_quiz_gap(
+            owner=owner,
+            session_id=sid,
+            concept_id=concept_id,
+            concept_title=concept_title,
+            consecutive_misses=consecutive_misses,
+            course_id=session.course_id,
+        )
+        return {"suggestion": suggestion.model_dump(mode="json", by_alias=True) if suggestion else None}
 
 
     @router.post("/sessions/{sid}/note-drafts", status_code=202)

@@ -1,0 +1,180 @@
+.transitionCard {
+  margin: 0.75rem 0 0.5rem 0;
+  padding: 0.85rem 1rem;
+  border-radius: 12px;
+  border: 1px solid rgba(0, 0, 0, 0.08);
+  background: var(--card, #ffffff);
+  box-shadow: 0 1px 3px rgba(0, 0, 0, 0.03), 0 2px 6px rgba(0, 0, 0, 0.02);
+  display: flex;
+  flex-direction: column;
+  gap: 0.6rem;
+  max-width: 540px;
+  position: relative;
+  overflow: hidden;
+  transition: border-color 0.15s ease, box-shadow 0.15s ease;
+}
+
+:global(.dark) .transitionCard {
+  border-color: rgba(255, 255, 255, 0.1);
+  background: var(--card, #1c1c1e);
+  box-shadow: 0 1px 3px rgba(0, 0, 0, 0.2);
+}
+
+.transitionCard.learn {
+  border-left: 3px solid #8c734b;
+  background: linear-gradient(180deg, rgba(239, 233, 216, 0.28) 0%, rgba(255, 255, 255, 0) 100%);
+}
+
+.transitionCard.quiz {
+  border-left: 3px solid #5a7b8c;
+  background: linear-gradient(180deg, rgba(230, 237, 242, 0.35) 0%, rgba(255, 255, 255, 0) 100%);
+}
+
+.header {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+}
+
+.iconTile {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 24px;
+  height: 24px;
+  border-radius: 6px;
+  shrink: 0;
+}
+
+.iconTile.learn {
+  background: #efe9d8;
+  color: #77663f;
+}
+
+.iconTile.quiz {
+  background: #e6edf2;
+  color: #4a6c7c;
+}
+
+:global(.dark) .iconTile.learn {
+  background: #383020;
+  color: #d8be8a;
+}
+
+:global(.dark) .iconTile.quiz {
+  background: #20303a;
+  color: #9ac2d6;
+}
+
+.title {
+  font-size: 0.84rem;
+  font-weight: 600;
+  color: var(--foreground);
+  letter-spacing: -0.01em;
+}
+
+.description {
+  margin: 0;
+  font-size: 0.8rem;
+  line-height: 1.45;
+  color: var(--muted-foreground);
+  padding-left: 0.15rem;
+}
+
+.actions {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  margin-top: 0.2rem;
+  padding-left: 0.15rem;
+}
+
+.primaryButton {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.35rem;
+  font-size: 0.78rem;
+  font-weight: 500;
+  padding: 0.35rem 0.75rem;
+  height: 28px;
+  border-radius: 7px;
+  cursor: pointer;
+  transition: all 0.12s ease;
+  border: 1px solid transparent;
+}
+
+.primaryButton.learn {
+  background: #77663f;
+  color: #ffffff;
+}
+
+.primaryButton.learn:hover {
+  background: #645533;
+}
+
+.primaryButton.quiz {
+  background: #4a6c7c;
+  color: #ffffff;
+}
+
+.primaryButton.quiz:hover {
+  background: #3b5764;
+}
+
+.dismissButton {
+  font-size: 0.78rem;
+  color: var(--muted-foreground);
+  background: transparent;
+  border: none;
+  padding: 0.35rem 0.55rem;
+  border-radius: 6px;
+  cursor: pointer;
+  transition: color 0.12s ease, background 0.12s ease;
+}
+
+.dismissButton:hover {
+  color: var(--foreground);
+  background: rgba(0, 0, 0, 0.04);
+}
+
+:global(.dark) .dismissButton:hover {
+  background: rgba(255, 255, 255, 0.06);
+}
+
+.originBadge {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.4rem;
+  padding: 0.3rem 0.65rem;
+  border-radius: 9999px;
+  background: rgba(239, 233, 216, 0.5);
+  border: 1px solid rgba(119, 102, 63, 0.2);
+  color: #77663f;
+  font-size: 0.75rem;
+  font-weight: 500;
+  margin-bottom: 0.75rem;
+  width: fit-content;
+}
+
+:global(.dark) .originBadge {
+  background: rgba(56, 48, 32, 0.5);
+  border-color: rgba(216, 190, 138, 0.25);
+  color: #d8be8a;
+}
+
+.originBadge button {
+  display: flex;
+  align-items: center;
+  background: transparent;
+  border: none;
+  color: inherit;
+  cursor: pointer;
+  padding: 0;
+  margin-left: 0.2rem;
+  opacity: 0.6;
+  transition: opacity 0.12s ease;
+}
+
+.originBadge button:hover {
+  opacity: 1;
+}

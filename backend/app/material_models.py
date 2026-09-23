@@ -9,12 +9,14 @@ class UploadRequest(ApiModel):
     media_type: Literal["application/pdf", "text/plain", "text/markdown", "image/png", "image/jpeg", "image/webp", "image/gif"]
     byte_count: int = Field(gt=0, le=50 * 1024 * 1024)
     role: Literal["reference", "textbook", "lecture_notes", "sample_paper", "answer_key"] = "reference"
+    course_id: str | None = None
 
 
 class TextMaterial(ApiModel):
     title: str = Field(min_length=1, max_length=300)
     text: str = Field(min_length=1, max_length=100000)
     role: Literal["reference", "textbook", "lecture_notes", "sample_paper", "answer_key"] = "reference"
+    course_id: str | None = None
 
 
 class AttachMaterial(ApiModel):

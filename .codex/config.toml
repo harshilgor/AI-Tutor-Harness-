@@ -1,0 +1,13 @@
+# UI component sources for the AI Tutor Harness.
+# This project-scoped configuration is loaded only for trusted Codex projects.
+
+[mcp_servers.shadcn]
+command = "npx"
+args = ["shadcn@latest", "mcp"]
+cwd = "C:/Projects/AI Tutor harness/web"
+
+[mcp_servers.twentyfirst]
+url = "https://21st.dev/api/mcp"
+# Set API_KEY_21ST in the local Codex environment after creating an API key at 21st.dev.
+# Keeping the key outside this repository prevents it from being committed.
+bearer_token_env_var = "API_KEY_21ST"

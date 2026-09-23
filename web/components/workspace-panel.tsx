@@ -1,8 +1,27 @@
 "use client";
 
 import { useCallback, useEffect, useRef, useState, type Dispatch, type SetStateAction } from 'react';
-import { BookOpen, ChevronLeft, FileText, PanelLeft, PanelLeftClose, PanelRightClose, Plus, Search, Send, X } from 'lucide-react';
+import { BookOpen, FileText, PanelLeft, PanelLeftClose, PanelRightClose, Plus, Search, Send, X } from 'lucide-react';
 import { Button } from '@/components/ui/button';
+import { Tabs, TabsList, TabsTrigger } from '@/components/ui/tabs';
+import {
+  AlertDialog,
+  AlertDialogAction,
+  AlertDialogCancel,
+  AlertDialogContent,
+  AlertDialogDescription,
+  AlertDialogFooter,
+  AlertDialogHeader,
+  AlertDialogTitle,
+} from '@/components/ui/alert-dialog';
+import {
+  Empty,
+  EmptyHeader,
+  EmptyMedia,
+  EmptyTitle,
+  EmptyDescription,
+  EmptyContent,
+} from '@/components/ui/empty';
 import { LearningApiError, friendlyServiceError, learningApi, request, type WorkspaceNote, type WorkspaceNoteSummary } from '@/lib/api';
 import { QuizWorkspace } from './quiz-workspace';
 import styles from './workspace-panel.module.css';
@@ -34,7 +53,7 @@ function SourcesPanel({ sourceToOpen }: { sourceToOpen?: { spanId: string; versi
   useEffect(() => { const timer = window.setTimeout(() => void load(), 0); return () => window.clearTimeout(timer); }, [load]);
   useEffect(() => { const receive = (event: Event) => { const detail = (event as CustomEvent<{ spanId: string; versionId?: string }>).detail; if (!detail?.spanId) return; if (detail.versionId) { void openVersion(detail.versionId, detail.spanId); return; } void request<SourceBlock>(`/v1/source-spans/${encodeURIComponent(detail.spanId)}`).then(block => openVersion(block.versionId, block.id)).catch(cause => setError(cause instanceof Error ? cause.message : 'This cited passage is no longer available.')); }; window.addEventListener(WORKSPACE_SOURCE_OPEN_EVENT, receive); return () => window.removeEventListener(WORKSPACE_SOURCE_OPEN_EVENT, receive); }, [openVersion]);
   useEffect(() => { if (!sourceToOpen?.spanId) return; const timer = window.setTimeout(() => { if (sourceToOpen.versionId) void openVersion(sourceToOpen.versionId, sourceToOpen.spanId); else void request<SourceBlock>(`/v1/source-spans/${encodeURIComponent(sourceToOpen.spanId)}`).then(block => openVersion(block.versionId, block.id)).catch(cause => setError(cause instanceof Error ? cause.message : 'This cited passage is no longer available.')); }, 0); return () => window.clearTimeout(timer); }, [openVersion, sourceToOpen]);
-  return <section className={styles.sourcesPanel} aria-label="Sources workspace"><header><div><span>YOUR MATERIALS</span><h2>Sources</h2></div><Button size="sm" variant="ghost" onClick={() => void load()}>Refresh</Button></header><p className={styles.sourceNotice}>Only passages you attach and select are provided as tutor or quiz context. Coverage can be limited.</p><div className={styles.sourceLayout}><div className={styles.sourceList}>{loading ? <p>Loading sources…</p> : materials.length ? materials.map(material => <button type="button" key={material.versionId} onClick={() => void openVersion(material.versionId)}><strong>{material.title}</strong><small>{material.status.replaceAll('_', ' ')} · {material.role.replaceAll('_', ' ')}</small></button>) : <p>No uploaded sources yet. Attach a text-based file in chat to inspect its passages here.</p>}</div><div className={styles.sourceDetail}>{active ? <><p className={styles.sourceMeta}>Passage · Page {active.pageIndex + 1}</p><pre>{active.text}</pre><p className={styles.sourceNotice}>This is extracted text. Layout and claims are not independently verified.</p></> : blocks.length ? <div>{blocks.map(block => <button className={styles.passageButton} type="button" key={block.id} onClick={() => setActive(block)}>Page {block.pageIndex + 1} · {block.text.slice(0, 100)}…</button>)}</div> : <div className={styles.comingSoon}><BookOpen size={26} /><h2>Inspect support</h2><p>Select a source or citation to see the exact passage behind it.</p></div>}</div></div>{error ? <p className={styles.error} role="alert">{error}</p> : null}</section>;
+  return <section className={styles.sourcesPanel} aria-label="Sources workspace"><header><div><span>YOUR MATERIALS</span><h2>Sources</h2></div><Button size="sm" variant="ghost" onClick={() => void load()}>Refresh</Button></header><p className={styles.sourceNotice}>Only passages you attach and select are provided as tutor or quiz context. Coverage can be limited.</p><div className={styles.sourceLayout}><div className={styles.sourceList}>{loading ? <p>Loading sources…</p> : materials.length ? materials.map(material => <button type="button" key={material.versionId} onClick={() => void openVersion(material.versionId)}><strong>{material.title}</strong><small>{material.status.replaceAll('_', ' ')} · {material.role.replaceAll('_', ' ')}</small></button>) : <p>No uploaded sources yet. Attach a text-based file in chat to inspect its passages here.</p>}</div><div className={styles.sourceDetail}>{active ? <><p className={styles.sourceMeta}>Passage · Page {active.pageIndex + 1}</p><pre>{active.text}</pre><p className={styles.sourceNotice}>This is extracted text. Layout and claims are not independently verified.</p></> : blocks.length ? <div>{blocks.map(block => <button className={styles.passageButton} type="button" key={block.id} onClick={() => setActive(block)}>Page {block.pageIndex + 1} · {block.text.slice(0, 100)}…</button>)}</div> : <Empty className="h-full justify-center p-8"><EmptyHeader><EmptyMedia><BookOpen className="size-8 text-muted-foreground" /></EmptyMedia><EmptyTitle>Inspect support</EmptyTitle><EmptyDescription>Select a source or citation to see the exact passage behind it.</EmptyDescription></EmptyHeader></Empty>}</div></div>{error ? <p className={styles.error} role="alert">{error}</p> : null}</section>;
 }
 
 function NoteEditor({ closeRequest, onClose, onCloseRequestHandled, onDirtyChange, seed, onSeedConsumed, noteToOpen, onNoteOpenConsumed, fullPage = false, onUseInChat }: { closeRequest: boolean; onClose: () => void; onCloseRequestHandled: () => void; onDirtyChange: (dirty: boolean) => void; seed: WorkspaceNoteSeed | null; onSeedConsumed: (id: string) => void; noteToOpen: string | null; onNoteOpenConsumed: (noteId: string) => void; fullPage?: boolean; onUseInChat?: () => void }) {
@@ -43,9 +62,7 @@ function NoteEditor({ closeRequest, onClose, onCloseRequestHandled, onDirtyChang
   const [savedDraft, setSavedDraft] = useState<NoteDraft | null>(null);
   const [query, setQuery] = useState('');
   const [loading, setLoading] = useState(true);
-  const [listCollapsed, setListCollapsed] = useState<boolean>(() => {
-    try { return typeof window !== 'undefined' && localStorage.getItem('forma-notes-list-v1') === 'collapsed'; } catch { return false; }
-  });
+  const [listCollapsed, setListCollapsed] = useState(false);
   // The initializer above runs during server rendering (always expanded);
   // sync the persisted preference on the client after mount.
   useEffect(() => {
@@ -258,7 +275,24 @@ function NoteEditor({ closeRequest, onClose, onCloseRequestHandled, onDirtyChang
         {listCollapsed ? <button type="button" className={styles.listToggle} title="Show note list" aria-label="Show note list" aria-expanded="false" onClick={() => setListCollapsedPersisted(false)}><PanelLeft size={15} /></button> : null}
         {draft ? <input value={draft.title} onChange={event => setDraft(current => current ? { ...current, title: event.target.value } : current)} aria-label="Note title" placeholder="Note title" /> : <span className={styles.focusHint}>Focus on writing</span>}
       </div> : null}
-      {!draft ? <div className={styles.emptyEditor}><BookOpen size={28} /><h2>Capture what matters</h2><p>Keep your own explanations, examples, and questions in local Markdown notes.</p><Button type="button" onClick={startBlank}><Plus size={16} />New note</Button></div> : <>
+      {!draft ? (
+        <Empty className="h-full justify-center p-8">
+          <EmptyHeader>
+            <EmptyMedia>
+              <BookOpen className="size-8 text-muted-foreground" />
+            </EmptyMedia>
+            <EmptyTitle>Capture what matters</EmptyTitle>
+            <EmptyDescription>
+              Keep your own explanations, examples, and questions in local Markdown notes.
+            </EmptyDescription>
+          </EmptyHeader>
+          <EmptyContent>
+            <Button type="button" onClick={startBlank}>
+              <Plus size={16} />New note
+            </Button>
+          </EmptyContent>
+        </Empty>
+      ) : <>
         <StudyNoteBar draft={draft} onChanged={(revision, frontmatter) => { const apply = (current: NoteDraft | null): NoteDraft | null => current && current.id ? { ...current, revision, frontmatter } : current; setDraft(apply); setSavedDraft(apply); }} />
         {(() => { const sessionIds = Array.isArray(draft.frontmatter?.session_ids) ? draft.frontmatter.session_ids as string[] : []; const sid = sessionIds[0]; const noteId = draft.id; return noteId && draft.frontmatter?.study_note === true && typeof sid === 'string' ? <NoteProposalList sessionId={sid} refreshKey={0} onChanged={() => void loadNote(noteId)} /> : null; })()}
         <div className={styles.status} role="status">{saving ? 'Saving…' : dirty ? 'Saving changes…' : draft.id ? 'Saved locally' : 'Start typing to create this note'}</div>
@@ -272,13 +306,48 @@ function NoteEditor({ closeRequest, onClose, onCloseRequestHandled, onDirtyChang
       </>}
       {error ? <p role="alert" className={styles.error}>{error}</p> : null}
     </div>
-    {pendingAction ? <div className={styles.confirm} role="dialog" aria-modal="true" aria-label="Unsaved note changes"><div><h2>Keep your changes?</h2><p>Save this note before switching, or discard the unsaved edits.</p><div><Button type="button" variant="outline" onClick={() => { setPendingAction(null); onCloseRequestHandled(); }}>Keep editing</Button><Button type="button" variant="ghost" onClick={() => { setPendingAction(null); onCloseRequestHandled(); pendingAction(); }}>Discard</Button><Button type="button" onClick={() => void save().then(saved => { if (saved) { setPendingAction(null); onCloseRequestHandled(); pendingAction(); } })}>Save changes</Button></div></div></div> : null}
+    <AlertDialog open={Boolean(pendingAction)} onOpenChange={open => { if (!open) { setPendingAction(null); onCloseRequestHandled(); } }}>
+      <AlertDialogContent size="sm">
+        <AlertDialogHeader>
+          <AlertDialogTitle>Keep your changes?</AlertDialogTitle>
+          <AlertDialogDescription>
+            Save this note before switching, or discard the unsaved edits.
+          </AlertDialogDescription>
+        </AlertDialogHeader>
+        <AlertDialogFooter>
+          <AlertDialogCancel onClick={() => { setPendingAction(null); onCloseRequestHandled(); }}>
+            Keep editing
+          </AlertDialogCancel>
+          <Button type="button" variant="ghost" onClick={() => {
+            const action = pendingAction;
+            setPendingAction(null);
+            onCloseRequestHandled();
+            action?.();
+          }}>
+            Discard
+          </Button>
+          <AlertDialogAction onClick={(e) => {
+            e.preventDefault();
+            void save().then(saved => {
+              if (saved) {
+                const action = pendingAction;
+                setPendingAction(null);
+                onCloseRequestHandled();
+                action?.();
+              }
+            });
+          }}>
+            Save changes
+          </AlertDialogAction>
+        </AlertDialogFooter>
+      </AlertDialogContent>
+    </AlertDialog>
   </section>;
 }
 
 /** Full notes destination. The chat side panel uses the same editor in a compact frame. */
 export function NotesWorkspace({ onUseInChat }: { onUseInChat?: () => void }) {
-  const [dirty, setDirty] = useState(false);
+  const [, setDirty] = useState(false);
   return <NoteEditor closeRequest={false} onClose={() => undefined} onCloseRequestHandled={() => undefined} onDirtyChange={setDirty} seed={null} onSeedConsumed={() => undefined} noteToOpen={null} onNoteOpenConsumed={() => undefined} fullPage onUseInChat={onUseInChat} />;
 }
 
@@ -320,19 +389,52 @@ export function WorkspacePanel({ quizSessionId, quizConceptId, layout, onLayoutC
 
   const active = layout.activeTab;
   return <aside className={`${styles.panel} ${layout.collapsed ? styles.collapsed : ''}`} aria-label="Workspace panel">
-    {layout.collapsed ? <button type="button" className={styles.expand} onClick={() => openTab('notes')} aria-label="Open workspace panel"><ChevronLeft size={18} /></button> : <>
-      <header className={styles.header}>
-        <div className={styles.tabs} role="tablist" aria-label="Workspace tabs">
-          {layout.tabs.map(tab => <button key={tab} type="button" role="tab" aria-selected={active === tab} className={active === tab ? styles.activeTab : ''} onClick={() => onLayoutChange(current => ({ ...current, activeTab: tab }))}>{tabNames[tab]}</button>)}
-          <div className={styles.launcher}><Button type="button" size="icon-xs" variant="ghost" onClick={() => setLauncherOpen(open => !open)} aria-expanded={launcherOpen} aria-label="Open a workspace tab"><Plus size={16} /></Button>{launcherOpen ? <div className={styles.launcherMenu}>{(['notes', 'quiz', 'sources'] as WorkspaceTab[]).map(tab => <button type="button" key={tab} onClick={() => openTab(tab)}>{tabNames[tab]}</button>)}</div> : null}</div>
+    <header className={styles.header}>
+      <div className={styles.tabsHeader}>
+        <Tabs value={active} onValueChange={(tab) => onLayoutChange(current => ({ ...current, activeTab: tab as WorkspaceTab }))}>
+          <TabsList variant="line" className="h-8">
+            {layout.tabs.map(tab => (
+              <TabsTrigger key={tab} value={tab} className="text-xs px-2.5 py-1">
+                {tabNames[tab]}
+              </TabsTrigger>
+            ))}
+          </TabsList>
+        </Tabs>
+        <div className={styles.launcher}>
+          <Button type="button" size="icon-xs" variant="ghost" onClick={() => setLauncherOpen(open => !open)} aria-expanded={launcherOpen} aria-label="Open a workspace tab" title="Add workspace tab">
+            <Plus size={15} />
+          </Button>
+          {launcherOpen ? (
+            <div className={styles.launcherMenu}>
+              {(['notes', 'quiz', 'sources'] as WorkspaceTab[]).map(tab => (
+                <button type="button" key={tab} onClick={() => openTab(tab)}>{tabNames[tab]}</button>
+              ))}
+            </div>
+          ) : null}
         </div>
-        <div className={styles.headerActions}><Button type="button" size="icon-xs" variant="ghost" onClick={closeActiveTab} aria-label={`Close ${tabNames[active]} tab`}><X size={15} /></Button><Button type="button" size="icon-xs" variant="ghost" onClick={() => { onLayoutChange(current => ({ ...current, collapsed: true })); onCollapse(); }} aria-label="Collapse workspace panel"><PanelRightClose size={16} /></Button></div>
-      </header>
-      <div className={styles.content}>
-        {active === 'notes' ? <NoteEditor closeRequest={noteCloseRequest} onDirtyChange={setNotesDirty} seed={noteSeed} onSeedConsumed={onNoteSeedConsumed} noteToOpen={noteToOpen} onNoteOpenConsumed={onNoteOpenConsumed} onCloseRequestHandled={() => setNoteCloseRequest(false)} onClose={() => { setNoteCloseRequest(false); removeActiveTab(); }} /> : null}
-        {active === 'quiz' ? <QuizWorkspace sessionId={quizSessionId} conceptId={quizConceptId} inline /> : null}
-        {active === 'sources' ? <SourcesPanel sourceToOpen={sourceToOpen} /> : null}
       </div>
-    </>}
+      <div className={styles.headerActions}>
+        {layout.tabs.length > 1 ? (
+          <Button type="button" size="icon-xs" variant="ghost" onClick={closeActiveTab} aria-label={`Close ${tabNames[active]} tab`} title={`Close ${tabNames[active]} tab`}>
+            <X size={15} />
+          </Button>
+        ) : null}
+        <Button
+          type="button"
+          size="icon-xs"
+          variant="ghost"
+          onClick={() => { onLayoutChange(current => ({ ...current, collapsed: true })); onCollapse(); }}
+          aria-label="Collapse notes"
+          title="Collapse notes"
+        >
+          <PanelRightClose size={15} />
+        </Button>
+      </div>
+    </header>
+    <div className={styles.content}>
+      {active === 'notes' ? <NoteEditor closeRequest={noteCloseRequest} onDirtyChange={setNotesDirty} seed={noteSeed} onSeedConsumed={onNoteSeedConsumed} noteToOpen={noteToOpen} onNoteOpenConsumed={onNoteOpenConsumed} onCloseRequestHandled={() => setNoteCloseRequest(false)} onClose={() => { setNoteCloseRequest(false); removeActiveTab(); }} /> : null}
+      {active === 'quiz' ? <QuizWorkspace sessionId={quizSessionId} conceptId={quizConceptId} inline /> : null}
+      {active === 'sources' ? <SourcesPanel sourceToOpen={sourceToOpen} /> : null}
+    </div>
   </aside>;
 }

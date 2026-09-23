@@ -1,7 +1,7 @@
 "use client";
 
 import { useCallback, useEffect, useLayoutEffect, useRef, useState } from 'react';
-import { ArrowUp, Check, ChevronDown, FileText, GraduationCap, MessageCircleQuestion, Plus, Square, X, Upload, type LucideIcon } from 'lucide-react';
+import { ArrowUp, Check, ChevronDown, CircleHelp, FileText, GraduationCap, MessageCircleQuestion, Plus, Square, X, Upload, type LucideIcon } from 'lucide-react';
 import { AnimatePresence, motion, useReducedMotion } from 'motion/react';
 import { Button } from '@/components/ui/button';
 import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuTrigger } from '@/components/ui/dropdown-menu';
@@ -20,6 +20,7 @@ export type ChatModeOption = {
 export const CHAT_MODES: ChatModeOption[] = [
   { value: 'ask', label: 'Ask', description: 'Ask questions and get direct answers', icon: MessageCircleQuestion, accent: '#5f705c', tileBg: '#e6ece1' },
   { value: 'learn', label: 'Learn', description: 'Learn a topic interactively, step by step', icon: GraduationCap, accent: '#77663f', tileBg: '#efe9d8' },
+  { value: 'quiz', label: 'Quiz', description: 'Practice active recall and test your understanding', icon: CircleHelp, accent: '#536d7a', tileBg: '#e6edf2' },
 ];
 
 export function ChatModeSelector({ mode, onModeChange, disabled }: {
@@ -129,7 +130,15 @@ export function ChatComposer({ value, onChange, attachments, onAttachmentsChange
     <ChatModeSelector mode={mode} onModeChange={onModeChange} disabled={busy} />
     {noteMentions.length > 0 ? <div className={styles.noteReceipt} aria-label="Learner note context"><AnimatePresence initial={false}>{noteMentions.map(note => <motion.span key={note.noteId} layout={!reduceMotion} initial={reduceMotion ? false : { opacity: 0, scale: 0.96 }} animate={{ opacity: 1, scale: 1 }} exit={reduceMotion ? undefined : { opacity: 0, scale: 0.96 }} transition={{ duration: 0.16 }}><button type="button" onClick={() => onOpenNoteMention?.(note.noteId)} title="Open note in workspace">@{note.title}</button><details><summary>{note.endOffset - note.startOffset} characters</summary><pre>{note.excerpt}</pre></details><button type="button" aria-label={`Remove ${note.title} from context`} onClick={() => onRemoveNoteMention?.(note.noteId)}><X size={12} /></button></motion.span>)}</AnimatePresence><p>Learner-provided context only. It is not a verified source.</p></div> : null}
     <label htmlFor="chat-message" className="sr-only">Message your tutor</label>
-    <textarea ref={textarea} id="chat-message" disabled={busy} value={value} maxLength={4000} placeholder={followup ? 'Ask a follow-up…' : 'Ask anything, or drop in a book…'} rows={followup ? 2 : 3} onChange={event => onChange(event.target.value)}
+    <textarea ref={textarea} id="chat-message" disabled={busy} value={value} maxLength={4000}
+      placeholder={
+        mode === 'quiz'
+          ? (followup ? 'Answer the question, or ask for a hint…' : 'Quiz a topic, or ask for practice questions…')
+          : mode === 'learn'
+          ? (followup ? 'Ask a follow-up about this lesson…' : 'What would you like to learn today?')
+          : (followup ? 'Ask a follow-up…' : 'Ask anything, or drop in a book…')
+      }
+      rows={followup ? 2 : 3} onChange={event => onChange(event.target.value)}
       onPaste={event => { if (event.clipboardData.files.length) { event.preventDefault(); add(Array.from(event.clipboardData.files)); } }}
       onKeyDown={event => { if (event.key === 'Enter' && !event.shiftKey && !event.nativeEvent.isComposing) { event.preventDefault(); onSubmit(); } }} />
     {noteQuery !== null && noteMatches.length > 0 ? <div className={styles.notePicker} role="listbox" aria-label="Notes to mention">{noteMatches.map(note => <button type="button" role="option" aria-selected="false" key={note.id} onClick={() => { onChange(value.replace(/@[^\s@]*$/, `@${note.title} `)); onAddNoteMention?.(note); setNoteMatches([]); }}><strong>{note.title}</strong><small>Revision {note.revision}</small></button>)}</div> : null}

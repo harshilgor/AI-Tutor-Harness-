@@ -90,6 +90,7 @@ class Store:
             self._put(connection, "learning_sessions", "id", session.id, {
                 "graph_id": session.graph_id,
                 "learner_id": session.learner_id,
+                "course_id": session.course_id,
                 "current_concept_id": session.current_concept_id,
                 "current_lesson_id": session.current_lesson_id,
                 "state_version": session.state_version,
@@ -179,6 +180,8 @@ class Store:
             ).scalars().all()
             for action_id in action_ids:
                 connection.execute(text("DELETE FROM action_events WHERE action_id = :id"), {"id": action_id})
+                connection.execute(text("DELETE FROM policy_validation_results WHERE action_id = :id"), {"id": action_id})
+                connection.execute(text("DELETE FROM teaching_plans WHERE action_id = :id"), {"id": action_id})
             connection.execute(text("DELETE FROM learning_actions WHERE session_id = :sid"), {"sid": session_id})
             connection.execute(text("DELETE FROM lesson_artifacts WHERE session_id = :sid"), {"sid": session_id})
             connection.execute(text("DELETE FROM material_attachments WHERE session_id = :sid"), {"sid": session_id})

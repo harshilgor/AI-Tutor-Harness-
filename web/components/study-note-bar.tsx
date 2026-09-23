@@ -41,6 +41,9 @@ export function StudyNoteBar({ draft, onChanged }: {
       <span className={styles.studyBarText}>
         Study note{mode === 'auto' ? ' · grows automatically as you learn' : mode === 'never' ? ' · tutor never edits' : ' · tutor proposes additions'}
       </span>
+      {draft.frontmatter.course_id ? (
+        <span className={styles.courseTag} title="Attached to course">Course note</span>
+      ) : null}
       {sessions.length > 0 ? (
         <button type="button" className={styles.studyBarLink} onClick={() => openChatSession(sessions[0])}>
           Open chat<ArrowUpRight size={13} />

@@ -1,0 +1,104 @@
+.activityContainer {
+  display: flex;
+  align-items: center;
+  gap: 14px;
+  padding: 10px 16px;
+  border: 1px solid #dfe5d7;
+  border-radius: 14px;
+  background: #fbfdf9;
+  box-shadow: 0 2px 10px rgba(50, 65, 45, 0.04);
+  margin: 10px 0 20px;
+  width: fit-content;
+  max-width: min(100%, 480px);
+  box-sizing: border-box;
+  transition: border-color 0.2s ease, background-color 0.2s ease;
+}
+
+.activityContainer:hover {
+  border-color: #cbdbbf;
+  background: #f8faf5;
+}
+
+.visualWrapper {
+  position: relative;
+  width: 36px;
+  height: 36px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  flex-shrink: 0;
+}
+
+.radarSvg {
+  width: 36px;
+  height: 36px;
+  overflow: visible;
+  display: block;
+}
+
+.textGroup {
+  display: flex;
+  flex-direction: column;
+  justify-content: center;
+  min-width: 0;
+  gap: 2px;
+}
+
+.titleRow {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 13px;
+  font-weight: 550;
+  color: #30362b;
+  line-height: 1.4;
+  letter-spacing: -0.1px;
+}
+
+.subtitle {
+  font-size: 12px;
+  color: #68715e;
+  line-height: 1.35;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  max-width: 360px;
+}
+
+.sourceBadge {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  font-size: 11px;
+  font-weight: 550;
+  color: #4b6540;
+  background: #edf3e7;
+  border: 1px solid #d4e0ce;
+  border-radius: 999px;
+  padding: 1px 7px;
+  margin-left: 4px;
+}
+
+.errorText {
+  color: #983b30;
+}
+
+/* Reduced motion overrides */
+@media (prefers-reduced-motion: reduce) {
+  .visualWrapper * {
+    animation: none !important;
+    transition: none !important;
+  }
+}
+
+@media (max-width: 600px) {
+  .activityContainer {
+    width: 100%;
+    max-width: 100%;
+    padding: 9px 13px;
+    gap: 11px;
+  }
+  .subtitle {
+    max-width: 220px;
+  }
+}
