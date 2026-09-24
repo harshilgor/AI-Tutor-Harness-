@@ -8,6 +8,7 @@ import { LearningApiError, learningApi, type Gear, type LessonArtifact, type Mod
 import styles from './learn-chat.module.css';
 import { ChatComposer, type ChatAttachment, type ChatNoteMention } from './chat-composer';
 import { LessonReader } from './lesson-reader';
+import { parseVisualization } from '@/lib/visualization-spec';
 import { RichContent } from './rich-content';
 import { materialRequest, materialCommand, prepareAttachment, type MaterialAnswer } from '@/lib/chat-materials';
 import { getJourney, workflow, waitForJob, resolveSessionHint, rememberSessionHint, navigateToSession, restoreSessionAuthority, isStaleSessionConflict, type ChatMode, type Journey } from '@/lib/learning-workflows';
@@ -20,12 +21,13 @@ import { ConceptProgressWhy } from './concept-progress-why';
 import { openWorkspaceNote, openWorkspaceNoteDraft, openWorkspaceSource, WORKSPACE_NOTE_MENTION_EVENT, WORKSPACE_NOTE_REPLACE_DRAFT_EVENT, type WorkspaceNoteMention } from '@/lib/workspace-events';
 import { WebResearchActivity, type AgentActivity } from './web-research-activity';
 import { ModeTransitionCard, OriginBadge } from './mode-transition-card';
+import { DevContextInspector } from './dev-context-inspector';
 
 type NoteContextReceipt = { label: string; notes: { noteId: string; title: string; revision: number; startOffset?: number | null; endOffset?: number | null }[]; totalCharacters: number };
 type ReplacementTarget = { noteId: string; title: string; revision: number; startOffset: number; endOffset: number };
-type StreamedBlock = { id: string; kind: string; heading: string; body: string; status: 'streaming' | 'completed' };
-type StreamedLesson = { id: string; blocks: StreamedBlock[]; status: 'streaming' | 'completed' };
-type Turn = { question: string; lesson?: LessonArtifact; answer?: MaterialAnswer; stream?: StreamedLesson; files?: string[]; sessionId?: string; noteContext?: NoteContextReceipt; transitionSuggestion?: ModeTransitionSuggestion | null };
+type StreamedBlock = { id: string; kind: string; heading: string; body: string; status: 'streaming' | 'completed'; visualizations?: unknown[] };
+type StreamedLesson = { id: string; blocks: StreamedBlock[]; status: 'streaming' | 'completed'; visualizations?: unknown[]; visualPending?: boolean };
+type Turn = { question: string; lesson?: LessonArtifact; answer?: MaterialAnswer; stream?: StreamedLesson; files?: string[]; sessionId?: string; generationId?: string; status?: 'pending' | 'completed' | 'failed' | 'cancelled' | 'interrupted'; errorCode?: string; noteContext?: NoteContextReceipt; transitionSuggestion?: ModeTransitionSuggestion | null };
 type SelectedPassage = { blockId: string; selectedText: string; lessonId?: string; sessionId?: string };
 type SelectionPanel = { selection: SelectedPassage; blocks: StreamedBlock[]; status: 'preparing' | 'streaming' | 'completed' | 'error'; error?: string };
 type GenerationRecovery = { generationId: string; sessionId: string; mode: GenerationMode; lastAppliedSequence: number; status: string };
@@ -211,7 +213,7 @@ export function LearnChat({
   const isProgrammaticScrollRef = useRef(false);
   const [hasNewContentBelow, setHasNewContentBelow] = useState(false);
   const scrollRafRef = useRef<number | null>(null);
-  const lesson = turns.at(-1)?.lesson || null;
+  const lesson = [...turns].reverse().find(turn => turn.lesson)?.lesson || null;
   function rememberGeneration(value: GenerationRecovery | null) { try { if (value) localStorage.setItem('forma-generation', JSON.stringify(value)); else localStorage.removeItem('forma-generation'); } catch { /* Recovery remains in memory. */ } }
 
   const checkIfNearBottom = useCallback(() => {
@@ -520,17 +522,38 @@ export function LearnChat({
             streamId = event.generationId;
             const nextBlock: StreamedBlock = { id: block?.id || `${event.generationId}-block`, kind: block?.kind || 'explanation', heading: block?.heading || 'Working through it', body: '', status: 'streaming' };
             setTurns(current => {
-              const last = current.at(-1);
-              if (last?.stream?.id === event.generationId) return current.map((turn, index) => index === current.length - 1 ? { ...turn, stream: { ...turn.stream!, blocks: [...turn.stream!.blocks, nextBlock] } } : turn);
-              return [...current, { question: input.question, sessionId: sid, stream: { id: event.generationId, blocks: [nextBlock], status: 'streaming' } }];
+              const index = current.findIndex(turn => turn.generationId === event.generationId || turn.stream?.id === event.generationId);
+              if (index >= 0) return current.map((turn, turnIndex) => turnIndex === index ? { ...turn, stream: { ...turn.stream, id: event.generationId, blocks: [...(turn.stream?.blocks || []), nextBlock], status: 'streaming' } } : turn);
+              return [...current, { question: input.question, sessionId: sid, generationId: event.generationId, status: 'pending', stream: { id: event.generationId, blocks: [nextBlock], status: 'streaming' } }];
             });
+            return;
+          }
+          if (event.type === 'visualization.planning') {
+            setTurns(current => current.map(turn => turn.generationId === event.generationId
+              ? { ...turn, stream: { id: event.generationId, blocks: turn.stream?.blocks || [], status: 'streaming', ...turn.stream, visualPending: true } }
+              : turn));
+            return;
+          }
+          if (event.type === 'visualization.skipped') {
+            setTurns(current => current.map(turn => turn.stream?.id === event.generationId
+              ? { ...turn, stream: { ...turn.stream, visualPending: false } } : turn));
+            return;
+          }
+          if (event.type === 'visualization.ready') {
+            const spec = parseVisualization(event.data.spec);
+            if (!spec) return;
+            setTurns(current => current.map(turn => {
+              if (turn.stream?.id !== event.generationId) return turn;
+              return { ...turn, stream: { ...turn.stream, visualPending: false,
+                visualizations: [...(turn.stream.visualizations || []), spec] } };
+            }));
             return;
           }
           if (event.type === 'text.delta') {
             setActivity(null);
             const text = typeof event.data.text === 'string' ? event.data.text : '';
             const blockId = String(event.data.blockId || '');
-            setTurns(current => current.map((turn, index) => index === current.length - 1 && turn.stream ? { ...turn, stream: { ...turn.stream, blocks: turn.stream.blocks.map(block => block.id === blockId ? { ...block, body: block.body + text } : block) } } : turn));
+            setTurns(current => current.map(turn => turn.stream?.id === event.generationId ? { ...turn, stream: { ...turn.stream, blocks: turn.stream.blocks.map(block => block.id === blockId ? { ...block, body: block.body + text } : block) } } : turn));
             if (isNearBottomRef.current) {
               if (!scrollRafRef.current) {
                 scrollRafRef.current = window.requestAnimationFrame(() => {
@@ -551,7 +574,7 @@ export function LearnChat({
           }
           if (event.type === 'lesson.block_completed') {
             const blockId = String(event.data.blockId || '');
-            setTurns(current => current.map((turn, index) => index === current.length - 1 && turn.stream ? { ...turn, stream: { ...turn.stream, blocks: turn.stream.blocks.map(block => block.id === blockId ? { ...block, status: 'completed' } : block) } } : turn));
+            setTurns(current => current.map(turn => turn.stream?.id === event.generationId ? { ...turn, stream: { ...turn.stream, blocks: turn.stream.blocks.map(block => block.id === blockId ? { ...block, status: 'completed' } : block) } } : turn));
             return;
           }
           if (event.type === 'generation.error' && event.data.code === 'REPLAY_EXPIRED') replayExpired = true;
@@ -568,7 +591,13 @@ export function LearnChat({
           }
         },
         onReconnect: () => setProgress('Reconnecting to your lesson…'),
-        onDescriptor: descriptor => rememberGeneration({ generationId: descriptor.id, sessionId: sid, mode: descriptor.mode, lastAppliedSequence: descriptor.sequence, status: descriptor.status }),
+        onDescriptor: descriptor => {
+          rememberGeneration({ generationId: descriptor.id, sessionId: sid, mode: descriptor.mode, lastAppliedSequence: descriptor.sequence, status: descriptor.status });
+          if (descriptor.journeyRevision) setJourney(current => current ? { ...current, revision: descriptor.journeyRevision! } : current);
+          setTurns(current => current.some(turn => turn.generationId === descriptor.id) ? current : [...current, {
+            question: input.question, sessionId: sid, generationId: descriptor.id, status: 'pending',
+          }]);
+        },
         onSequence: sequence => {
           const descriptor = stream.descriptor;
           if (descriptor) rememberGeneration({ generationId: descriptor.id, sessionId: sid, mode: descriptor.mode, lastAppliedSequence: sequence, status: 'streaming' });
@@ -587,7 +616,8 @@ export function LearnChat({
         try { applyJourney((await restoreSessionAuthority(sid)).journey); setError('This tab was out of date. Showing the latest committed lesson.'); }
         catch { setError('This tab is out of date. Reload to continue.'); }
       } else {
-        setTurns(current => current.filter(turn => !turn.stream || turn.stream.id !== streamId));
+        try { applyJourney(await getJourney(sid)); }
+        catch { setTurns(current => current.map(turn => turn.generationId === streamId ? { ...turn, stream: undefined, status: 'failed' } : turn)); }
         setError(cause instanceof Error ? cause.message : 'The lesson could not be completed.');
       }
     } finally {
@@ -627,6 +657,7 @@ export function LearnChat({
       if (!stream.wasCancelled) { setSelectionPanel(current => current ? { ...current, status: 'completed' } : current); applyJourney(await getJourney(sid)); }
     } catch (cause) {
       setSelectionPanel(current => current ? { ...current, status: 'error', error: cause instanceof Error ? cause.message : 'Could not explain this selection.' } : current);
+      try { applyJourney(await getJourney(sid)); } catch { /* Keep the visible selection error. */ }
     } finally { activeGeneration.current = null; setBusy(false); }
   }
 
@@ -720,12 +751,18 @@ export function LearnChat({
     {!turns.length && !busy ? <RotatingGreeting /> : null}
     {!turns.length && busy && !streaming && !activity ? <div className={styles.loading} role="status"><LoaderCircle className={styles.spinner} size={22} /><h2>{progress}</h2><p>{prompt}</p><span>A thoughtful answer takes a little time.</span></div> : null}
     {!turns.length && activity ? <AnimatePresence mode="wait">{activity && <WebResearchActivity activity={activity} />}</AnimatePresence> : null}
-    {turns.map((turn, turnIndex) => <motion.div key={turn.lesson?.id || turn.stream?.id || `material-${turnIndex}`} className={styles.turn} initial={reduceMotion ? false : { opacity: 0, y: 12 }} animate={{ opacity: 1, y: 0 }} transition={{ duration: 0.2, ease: 'easeOut' }}>
+    {turns.map((turn, turnIndex) => <motion.div key={turn.generationId || turn.lesson?.id || turn.stream?.id || `material-${turnIndex}`} className={styles.turn} initial={reduceMotion ? false : { opacity: 0, y: 12 }} animate={{ opacity: 1, y: 0 }} transition={{ duration: 0.2, ease: 'easeOut' }}>
       {!SYNTHETIC_QUESTIONS.has(turn.question) ? <div className={styles.userPrompt}><span>You</span><div><p>{turn.question}</p>{turn.files?.map(name => <div className={styles.sentFile} key={name}><FileText size={15} />{name}</div>)}</div></div> : null}
       <article aria-label="Learning lesson" className={styles.lessonArticle}>
-        <LessonReader id={turn.lesson?.id || turn.stream?.id || `material-${turnIndex}`}
-          blocks={turn.lesson ? turn.lesson.blocks.filter(block => block.kind !== 'source_note') : turn.stream ? turn.stream.blocks.map(block => ({ id: block.id, heading: block.heading, body: block.body || '…' })) : (turn.answer?.blocks || []).map((block, index) => ({ ...block, id: `block-${index}` }))}
-          onSelect={(block, raw) => setSelection({ blockId: block.id, selectedText: raw.slice(0, 1200), lessonId: turn.lesson?.id, sessionId: turn.sessionId })} />
+        {!turn.lesson && !turn.stream && !turn.answer && turn.status ? <p className={styles.turnStatus} role="status">{turn.status === 'pending' ? 'Preparing a response…' : turn.status === 'cancelled' ? 'Response stopped.' : turn.status === 'interrupted' ? 'Response interrupted. You can ask again.' : 'Response failed. You can ask again.'}</p> : null}
+        {(turn.lesson || turn.stream || turn.answer) ? <LessonReader id={turn.lesson?.id || turn.stream?.id || `material-${turnIndex}`}
+          lessonId={turn.lesson?.id}
+          blocks={turn.lesson ? turn.lesson.blocks.filter(block => block.kind !== 'source_note') : turn.stream ? turn.stream.blocks.map((block, index) => ({
+            id: block.id, heading: block.heading, body: block.body || '…',
+            visualizations: (turn.stream?.visualizations || []).filter(value => parseVisualization(value)?.blockIndex === index),
+          })) : (turn.answer?.blocks || []).map((block, index) => ({ ...block, id: `block-${index}` }))}
+          visualPending={Boolean(turn.stream?.visualPending)}
+          onSelect={(block, raw) => setSelection({ blockId: block.id, selectedText: raw.slice(0, 1200), lessonId: turn.lesson?.id, sessionId: turn.sessionId })} /> : null}
         {turn.answer && <><p className={styles.hint}>{turn.answer.message}</p>{turn.answer.sources.length > 0 && <details className={styles.sources}><summary>{turn.answer.sources.length} passages from your materials</summary><p className={styles.hint}>Coverage is limited to these selected passages.</p>{turn.answer.sources.map(source => <button type="button" className={styles.sourceChip} key={source.spanId} onClick={() => openWorkspaceSource(source)}>{source.title} · Page {source.pageIndex + 1}</button>)}</details>}</>}
         {turn.noteContext?.notes.length ? <div className={styles.noteContextReceipt}><span>Learner note context · {turn.noteContext.totalCharacters} characters</span>{turn.noteContext.notes.map(note => <button type="button" key={note.noteId} onClick={() => openWorkspaceNote(note.noteId)}>@{note.title}</button>)}</div> : null}
         {noteDrafts.filter(draft => draft.sessionId === turn.sessionId).map(draft => <NoteDraftCard key={draft.id} draft={draft} onHandled={updated => setNoteDrafts(current => current.map(item => item.id === updated.id ? updated : item))} />)}
@@ -737,6 +774,7 @@ export function LearnChat({
             onDismiss={handleDismissTransition}
           />
         ) : null}
+        {turn.generationId && turn.status !== 'pending' ? <DevContextInspector generationId={turn.generationId} /> : null}
       </article>
     </motion.div>)}
     {turns.length > 0 && busy && !streaming && !activity ? <div className={styles.loading} role="status"><LoaderCircle className={styles.spinner} size={22} /><h2>{progress}</h2><p>{prompt}</p><span>A thoughtful answer takes a little time.</span></div> : null}

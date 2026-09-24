@@ -5,6 +5,9 @@ import pytest
 
 import backend.app.model_provider as model_provider
 from backend.app.model_provider import ImageInput, ModelProviderError, OpenRouterLessonProvider, configured_lesson_provider
+from backend.app.json_context_prompt import bounded_json_prompt
+from backend.app.context_engine import GenerationContext
+from backend.app.context_engine import ContextBlock, ContextEngine
 
 
 def test_openrouter_provider_parses_structured_lesson(monkeypatch):
@@ -16,6 +19,30 @@ def test_openrouter_provider_parses_structured_lesson(monkeypatch):
     monkeypatch.setattr(httpx, "post", lambda *args, **kwargs: response)
     blocks = provider.generate(graph=None, concept=type("Concept", (), {"title": "Volcanoes"})(), context=None, plan=type("Plan", (), {"strategy": type("S", (), {"value": "direct_explanation"})(), "representation_sequence": ["intuition"]})(), intent=type("I", (), {"value": "teach"})())
     assert [block.kind for block in blocks] == ["explanation", "check"]
+
+
+@pytest.mark.parametrize("openai", [False, True])
+def test_json_context_uses_provider_native_roles(monkeypatch, openai):
+    provider = OpenRouterLessonProvider.openai("key", "model") if openai else OpenRouterLessonProvider("key", "model", None, None)
+    request = bounded_json_prompt(provider, "Follow schema.", {"schema": {"type": "object"}, "source": "untrusted data"},
+                                  required={"schema", "source"})
+    assert isinstance(request, GenerationContext)
+    sent = {}
+    def post(*args, **kwargs):
+        sent.update(kwargs["json"])
+        if openai:
+            return httpx.Response(200, request=httpx.Request("POST", "https://example.test"), json={"output_text": '{"ok":true}'})
+        return httpx.Response(200, request=httpx.Request("POST", "https://example.test"), json={"choices": [{"message": {"content": '{"ok":true}'}}]})
+    monkeypatch.setattr(httpx, "post", post)
+    assert provider.complete_json(request) == {"ok": True}
+    if openai:
+        assert "Follow schema." in sent["instructions"]
+        messages = sent["input"]
+    else:
+        assert "Follow schema." in sent["messages"][0]["content"]
+        messages = sent["messages"][1:]
+    assert "untrusted data" in messages[0]["content"]
+    assert messages[-1]["content"] == "Generate the requested JSON response."
 
 
 def test_openrouter_provider_rejects_invalid_blocks(monkeypatch):
@@ -106,3 +133,28 @@ def test_openrouter_streaming_payload_contains_real_image_input():
     assert content[0]["type"] == "text"
     assert content[1]["type"] == "image_url"
     assert content[1]["image_url"]["url"].startswith("data:image/jpeg;base64,")
+
+
+@pytest.mark.parametrize("openai", [False, True])
+def test_structured_streaming_payload_preserves_context_role_order_and_current_turn(openai):
+    provider = OpenRouterLessonProvider.openai("key", "model") if openai else OpenRouterLessonProvider("key", "model", None, None)
+    turns = [{"question": f"Question {index}", "lesson": {"blocks": [{"body": f"Answer {index}"}]}} for index in range(3)]
+    context = ContextEngine(input_budget_tokens=3000).build_generation_context(
+        instructions="Tutor instructions", current_user_message="My latest correction",
+        candidates=[ContextBlock("course", {"courseId": "course-1", "goal": "Algebra"}, "course", 1)],
+        turns=turns,
+    )
+    payload = provider.streaming_payload(context, 500)
+    messages = payload["input"] if openai else payload["messages"]
+    if not openai:
+        assert messages[0] == {"role": "system", "content": "Tutor instructions"}
+        messages = messages[1:]
+    else:
+        assert payload["instructions"] == "Tutor instructions"
+    assert messages[0]["role"] == "user" and '"courseId": "course-1"' in messages[0]["content"]
+    assert [(item["role"], item["content"]) for item in messages[1:-1]] == [
+        ("user", "Question 0"), ("assistant", "Answer 0"),
+        ("user", "Question 1"), ("assistant", "Answer 1"),
+        ("user", "Question 2"), ("assistant", "Answer 2"),
+    ]
+    assert messages[-1] == {"role": "user", "content": "My latest correction"}

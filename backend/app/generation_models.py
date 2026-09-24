@@ -6,6 +6,7 @@ from pydantic import Field
 
 from .assessment_models import JourneyCommand
 from .session_models import ApiModel
+from .visualization_models import VisualType
 
 GenerationStatus = Literal["queued", "preparing", "streaming", "finalizing", "completed", "cancel_requested", "cancelled", "failed", "interrupted"]
 GenerationEventType = Literal[
@@ -13,6 +14,9 @@ GenerationEventType = Literal[
     "generation.context_ready",
     "text.delta",
     "lesson.block_started",
+    "visualization.planning",
+    "visualization.ready",
+    "visualization.skipped",
     "lesson.block_completed",
     "source.added",
     "tool.started",
@@ -30,6 +34,7 @@ class GenerationRequest(JourneyCommand):
     selected_text: str | None = Field(default=None, max_length=2000)
     selected_lesson_id: str | None = Field(default=None, max_length=160)
     selected_block_id: str | None = Field(default=None, max_length=160)
+    visual_type: VisualType | Literal["auto"] = "auto"
 
 
 class GenerationDescriptor(ApiModel):
@@ -40,6 +45,7 @@ class GenerationDescriptor(ApiModel):
     sequence: int = 0
     provider: str
     model: str
+    journey_revision: int | None = None
     final_revision: int | None = None
     error_code: str | None = None
     metrics: dict[str, float | int | bool | str | None] = Field(default_factory=dict)

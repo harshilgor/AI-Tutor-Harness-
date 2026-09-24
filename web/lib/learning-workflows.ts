@@ -5,7 +5,7 @@ export type Source = { spanId: string; title: string; text: string; pageIndex: n
 export type Journey = {
   id: string; sessionId: string; revision: number; mode: ChatMode; gear: Gear; goal: string;
   status: string; position: number; steps: { conceptId: string; title: string; objective: string }[];
-  turns: { question: string; lesson: LessonArtifact; sessionId: string; sources?: Source[]; noteContext?: { label: string; totalCharacters: number; notes: { noteId: string; title: string; revision: number; startOffset?: number | null; endOffset?: number | null }[] }; transitionSuggestion?: ModeTransitionSuggestion | null }[];
+  turns: { question: string; lesson?: LessonArtifact; sessionId: string; generationId?: string; status?: 'pending' | 'completed' | 'failed' | 'cancelled' | 'interrupted'; errorCode?: string; submittedAt?: number; sources?: Source[]; noteContext?: { label: string; totalCharacters: number; notes: { noteId: string; title: string; revision: number; startOffset?: number | null; endOffset?: number | null }[] }; transitionSuggestion?: ModeTransitionSuggestion | null }[];
 };
 export type Presentation = {
   id: string; quizId: string; concept_id: string; kind: 'single' | 'multiple' | 'short'; stem: string;

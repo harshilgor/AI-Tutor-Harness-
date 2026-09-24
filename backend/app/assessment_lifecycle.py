@@ -261,6 +261,7 @@ class AssessmentLifecycle:
             "correctIds": item.correct_ids,
             "evidenceId": None,
             "conceptState": None,
+            "createdAt": utc_now().isoformat(),
         }
         return presentation, item, attempt
 

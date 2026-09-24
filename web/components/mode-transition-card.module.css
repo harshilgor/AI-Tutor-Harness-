@@ -29,6 +29,8 @@
   border-left: 3px solid #5a7b8c;
   background: linear-gradient(180deg, rgba(230, 237, 242, 0.35) 0%, rgba(255, 255, 255, 0) 100%);
 }
+:global(.dark) .transitionCard.learn,:global(.dark) .transitionCard.quiz{background:var(--card)}
+:global(.dark) .iconTile.learn,:global(.dark) .iconTile.quiz{background:var(--secondary);color:var(--primary)}
 
 .header {
   display: flex;

@@ -6,3 +6,5 @@
 .update p { margin: 4px 0 0; color: #687761; font-size: 13px; line-height: 1.45; }
 .message { margin: 0; color: #687761; font-size: 13px; }
 .file { display: none; }
+:global(.dark) .callout,:global(.dark) .update{border-color:var(--border);background:var(--card);color:var(--foreground)}
+:global(.dark) .callout strong,:global(.dark) .update strong,:global(.dark) .update p{color:var(--foreground)}

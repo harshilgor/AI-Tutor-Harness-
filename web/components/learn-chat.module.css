@@ -45,6 +45,7 @@
 .readerTop { display: flex; align-items: center; justify-content: space-between; color: #77796f; font-size: 13px; margin-bottom: 16px; }
 .title { font-size: clamp(24px, 3vw, 30px); line-height: 1.3; letter-spacing: -0.8px; font-weight: 500; overflow-wrap: anywhere; }
 .hint { color: #72756b; font-size: 13px; line-height: 1.6; margin: 10px 0 20px; }
+.turnStatus { color: #72756b; font-size: 13px; line-height: 1.6; }
 .reading article { font-size: 15px; line-height: 1.65; color: #33372f; }
 .reading article section { margin: 22px 0; }
 .reading article p { margin: 8px 0; white-space: pre-wrap; overflow-wrap: anywhere; }
@@ -201,3 +202,63 @@ does not read as a solid white empty slab. */
 .courseBadge svg {
   color: #4a6344;
 }
+
+:global(.dark) .chatShell { background: var(--background); color: var(--foreground); }
+:global(.dark) .greeting,
+:global(.dark) .readerTop,
+:global(.dark) .hint,
+:global(.dark) .turnStatus,
+:global(.dark) .reading article,
+:global(.dark) .lessonArticle,
+:global(.dark) .heading,
+:global(.dark) .gearSelect,
+:global(.dark) .composerNote,
+:global(.dark) .sources,
+:global(.dark) .sentFile { color: var(--foreground); }
+:global(.dark) .composer,
+:global(.dark) .followupComposer,
+:global(.dark) .studyPanel,
+:global(.dark) .selection,
+:global(.dark) .newContentIndicator { border-color: var(--border); background: var(--card); color: var(--card-foreground); box-shadow: 0 8px 24px rgba(0,0,0,.24); }
+:global(.dark) .composer textarea,
+:global(.dark) .followupComposer textarea,
+:global(.dark) .studyPanel textarea { color: var(--foreground); }
+:global(.dark) .composer textarea::placeholder,
+:global(.dark) .followupComposer textarea::placeholder { color: var(--muted-foreground); }
+:global(.dark) .attachButton,
+:global(.dark) .modeTrigger,
+:global(.dark) .courseBadge { border-color: var(--border); background: var(--secondary); color: var(--secondary-foreground); }
+:global(.dark) .attachButton:hover,
+:global(.dark) .modeTrigger:hover,
+:global(.dark) .courseBadge:hover,
+:global(.dark) .newContentIndicator:hover { background: var(--accent); border-color: var(--ring); }
+:global(.dark) .gearSelect:hover { background: var(--muted); border-color: var(--border); }
+:global(.dark) .attachments,
+:global(.dark) .attachment,
+:global(.dark) .userPrompt,
+:global(.dark) .quote,
+:global(.dark) .tableWrap th,
+:global(.dark) .noteDraft pre,
+:global(.dark) .notePicker,
+:global(.dark) .noteDraft,
+:global(.dark) .sourceChip,
+:global(.dark) .courseBadge { background: var(--secondary); color: var(--secondary-foreground); }
+:global(.dark) .attachment strong,
+:global(.dark) .heading,
+:global(.dark) .tableWrap th { color: var(--foreground); }
+:global(.dark) .attachment span,
+:global(.dark) .loading span,
+:global(.dark) .hint,
+:global(.dark) .turnStatus,
+:global(.dark) .panelHeader span,
+:global(.dark) .studyPanel blockquote { color: var(--muted-foreground); }
+:global(.dark) .studyPanel blockquote,
+:global(.dark) .equation,
+:global(.dark) .noteDraft,
+:global(.dark) .noteDraft pre { border-color: var(--border); background: var(--muted); color: var(--foreground); }
+:global(.dark) .tableWrap,
+:global(.dark) .tableWrap th,
+:global(.dark) .tableWrap td,
+:global(.dark) .sources { border-color: var(--border); }
+:global(.dark) .newContentIndicator svg,
+:global(.dark) .courseBadge svg { color: var(--primary); }

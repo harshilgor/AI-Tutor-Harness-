@@ -8,6 +8,7 @@ from typing import Any
 from pydantic import BaseModel, Field
 
 from ..model_provider import ModelProviderError
+from ..json_context_prompt import bounded_json_prompt
 from .prompts import REMEDIATION_V1
 
 
@@ -29,13 +30,13 @@ def generate_remediation(
         return _fallback(concept_title, source_excerpt, missing_concepts)
     try:
         raw = provider.complete_json(
-            REMEDIATION_V1 + "\n" + json.dumps({
+            bounded_json_prompt(provider, REMEDIATION_V1, {
                 "schema": RemediationLesson.model_json_schema(),
                 "concept": concept_title,
                 "source_excerpt": source_excerpt[:3000],
                 "missing_concepts": missing_concepts or [],
                 "prior_feedback": feedback or "",
-            }, ensure_ascii=False),
+            }, required={"schema", "concept", "source_excerpt"}),
             1000,
         )
         lesson = RemediationLesson.model_validate(raw)

@@ -113,6 +113,44 @@
   background: var(--card);
 }
 
+.preferenceTitle {
+  margin: 0;
+  color: var(--foreground);
+  font-size: 15px;
+  font-weight: 600;
+}
+
+.preferenceHelp {
+  margin: 6px 0 16px;
+  color: var(--muted-foreground);
+  font-size: 13px;
+  line-height: 1.55;
+}
+
+.themeChoices {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 10px;
+}
+
+.themeChoice {
+  display: inline-flex;
+  min-width: 118px;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+  border: 1px solid var(--border);
+  border-radius: 9px;
+  padding: 10px 14px;
+  background: var(--background);
+  color: var(--foreground);
+  font: inherit;
+  font-size: 13px;
+}
+
+.themeChoice:hover { background: var(--muted); }
+.themeChoiceActive { border-color: var(--ring); background: var(--accent); color: var(--accent-foreground); }
+
 .card .muted,
 .muted {
   margin: 12px 0 0;

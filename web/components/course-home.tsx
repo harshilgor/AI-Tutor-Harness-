@@ -1126,7 +1126,7 @@ export function CourseHome({
                         {n.title}
                       </p>
                       <p className="text-[11px] text-muted-foreground flex items-center gap-2">
-                        {n.tags.length > 0 && <span>#{n.tags[0]}</span>}
+                        {Array.isArray(n.frontmatter.tags) && typeof n.frontmatter.tags[0] === 'string' && <span>#{n.frontmatter.tags[0]}</span>}
                         <span>•</span>
                         <span>{new Date(n.updatedAt).toLocaleDateString()}</span>
                       </p>

@@ -8,6 +8,7 @@ from uuid import uuid4
 
 from pydantic import BaseModel, Field
 
+from ..json_context_prompt import bounded_json_prompt
 from ..model_provider import ModelProviderError
 from .models import QuestionType
 from .prompts import QUESTION_GENERATE_V1
@@ -66,14 +67,16 @@ def generate_question(
         "required": ["question_type", "prompt", "expected_answer"],
     }
     try:
+        configured = getattr(provider, "context_input_budget_tokens", 12000)
+        budget = configured if isinstance(configured, int) and configured > 0 else 12000
         raw = provider.complete_json(
-            QUESTION_GENERATE_V1 + "\n" + json.dumps({
+            bounded_json_prompt(provider, QUESTION_GENERATE_V1, {
                 "schema": schema,
                 "preferred_type": qtype,
                 "concept": {"title": concept_title, "summary": concept_summary},
-                "source_excerpt": source_excerpt[:4000],
+                "source_excerpt": source_excerpt[:min(4000, budget // 2)],
                 "recent_questions": recent[-5:],
-            }, ensure_ascii=False),
+            }, required={"schema", "preferred_type", "concept", "source_excerpt"}),
             1200,
         )
         item = GeneratedQuestion.model_validate(raw)

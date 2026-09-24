@@ -8,6 +8,7 @@ from typing import Any
 from pydantic import BaseModel, Field
 
 from ..model_provider import ModelProviderError
+from ..json_context_prompt import bounded_json_prompt
 from .models import ReviewEvaluationResult
 from .prompts import ANSWER_EVALUATE_V1
 
@@ -65,14 +66,14 @@ def evaluate_answer(
         return _heuristic(text, expected_answer, concept_title)
     try:
         raw = provider.complete_json(
-            ANSWER_EVALUATE_V1 + "\n" + json.dumps({
+            bounded_json_prompt(provider, ANSWER_EVALUATE_V1, {
                 "schema": _EvalSchema.model_json_schema(),
                 "concept": concept_title,
                 "source_excerpt": source_excerpt[:4000],
                 "question": prompt,
                 "expected_answer": expected_answer,
                 "learner_response": text,
-            }, ensure_ascii=False),
+            }, required={"schema", "concept", "source_excerpt", "question", "expected_answer", "learner_response"}),
             1600,
         )
         parsed = _EvalSchema.model_validate(raw)

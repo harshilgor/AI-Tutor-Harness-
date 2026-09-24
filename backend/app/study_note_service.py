@@ -327,7 +327,14 @@ class StudyNoteService:
             question, lesson_text, concept_id, lesson_id = self._turn_text(turn)
             created_from = f"turn:{lesson_id or index}"
             concept_title = self._concept_title(owner, session, concept_id)
-            context = {"question": question, "lesson": lesson_text, "conceptId": concept_id, "conceptTitle": concept_title}
+            visual_refs = [
+                {"lessonId": lesson_id, "visualizationId": visual.get("id"), "title": visual.get("title")}
+                for block in turn.get("lesson", {}).get("blocks", [])
+                for visual in block.get("visualizations", [])
+                if isinstance(visual, dict) and visual.get("id")
+            ][:3]
+            context = {"question": question, "lesson": lesson_text, "conceptId": concept_id,
+                       "conceptTitle": concept_title, "visualRefs": visual_refs}
         if self._tombstoned(owner, note.id, created_from):
             return {"skipped": "tombstoned", "sessionId": sid, "noteId": note.id}
         mode = self.tutor_updates_mode(note)
@@ -387,6 +394,12 @@ class StudyNoteService:
                               "existingSections": existing_sections,
                               "existingHeadings": existing_headings}, ensure_ascii=False)
             )
+        from .json_context_prompt import bounded_json_prompt
+        instructions, serialized_context = prompt.rsplit("\n", 1)
+        context_payload = json.loads(serialized_context)
+        required = {"gaps", "checklistDraft"} if command.origin == "quiz" else (
+            {"exploration", "content"} if command.origin == "insight" else {"question", "lesson"})
+        prompt = bounded_json_prompt(provider, instructions, context_payload, required=required)
         raw = provider.complete_json(prompt, 1500)
         action = str(raw.get("action", "add")).strip().lower()
         if action not in {"add", "refine", "skip"}:
@@ -397,6 +410,9 @@ class StudyNoteService:
         body = str(raw.get("body", "")).strip()[:12000]
         if not heading or not body:
             raise ModelProviderError("The synthesis did not produce a usable note section.")
+        if command.origin == "turn" and context.get("visualRefs"):
+            for visual_ref in context["visualRefs"]:
+                body += "\n\n```visualization-ref\n" + json.dumps(visual_ref, ensure_ascii=False) + "\n```"
         concept_title = context.get("conceptTitle") or (str(raw.get("concept_title", "")).strip() or None)
         graph_concept_id = context.get("conceptId")
         learner_concept_id = self.resolve_learner_concept(owner, graph_concept_id)

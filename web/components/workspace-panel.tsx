@@ -28,6 +28,7 @@ import styles from './workspace-panel.module.css';
 import { mentionWorkspaceNoteExcerpt, WORKSPACE_SOURCE_OPEN_EVENT, type WorkspaceNoteSeed } from '@/lib/workspace-events';
 import { StudyNoteBar } from './study-note-bar';
 import { NoteProposalList } from './study-note-panel';
+import { NoteVisualReferences } from './visualization-reference';
 
 export type WorkspaceTab = 'notes' | 'quiz' | 'sources';
 export type WorkspacePanelLayout = { width: number; collapsed: boolean; tabs: WorkspaceTab[]; activeTab: WorkspaceTab };
@@ -303,6 +304,7 @@ function NoteEditor({ closeRequest, onClose, onCloseRequestHandled, onDirtyChang
             onSelect={() => refreshExcerptAnchor()} />
           {excerptAnchor && draft.id ? <button type="button" className={styles.excerptFloat} style={{ left: excerptAnchor.x, top: excerptAnchor.y }} onClick={() => mentionSelectedExcerpt()}><Send size={13} />Ask in chat</button> : null}
         </div>
+        <NoteVisualReferences body={draft.body}/>
       </>}
       {error ? <p role="alert" className={styles.error}>{error}</p> : null}
     </div>

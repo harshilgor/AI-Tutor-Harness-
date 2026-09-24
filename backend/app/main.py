@@ -436,12 +436,31 @@ def create_teaching_action(
             gear=selected_gear,
             learner_graph=learner_projection,
         )
+        branch_anchor = active_branch.anchor.model_dump(mode="json", by_alias=True) if active_branch else (request.anchor.model_dump(mode="json", by_alias=True) if request.anchor else None)
+        if active_branch and branch_anchor is not None:
+            # Carry only the anchored parent lesson excerpt into this isolated
+            # branch. The parent's full transcript remains in its own session.
+            lesson_id = active_branch.anchor.lesson_id
+            parent_lesson = db.get_artifact(lesson_id) if lesson_id else None
+            if parent_lesson and parent_lesson.session_id == session.id:
+                parent_block = next((block for block in parent_lesson.blocks
+                                     if block.id == active_branch.anchor.block_id), None)
+                if parent_block is None and parent_lesson.blocks:
+                    parent_block = parent_lesson.blocks[0]
+                branch_anchor["parentLesson"] = {
+                    "id": parent_lesson.id, "title": parent_lesson.title,
+                    "conceptId": parent_lesson.concept_id,
+                    "heading": parent_block.heading if parent_block else None,
+                    "excerpt": parent_block.body[:1600] if parent_block else None,
+                }
+            if active_branch.summary:
+                branch_anchor["branchSummary"] = active_branch.summary[:2000]
         action_context = action_context.model_copy(update={
             "learner_evidence": canonical_evidence(db, session.learner_id, graph),
             "request_message": request.message or (active_branch.anchor.selected_text if active_branch else concept.title),
             "branch_id": active_branch.id if active_branch else None,
             "parent_branch_id": active_branch.parent_branch_id if active_branch else None,
-            "anchor": active_branch.anchor.model_dump(mode="json", by_alias=True) if active_branch else (request.anchor.model_dump(mode="json", by_alias=True) if request.anchor else None),
+            "anchor": branch_anchor,
         })
         action = action.model_copy(update={"status": ActionStatus.context_ready, "progress": 30, "action_context": action_context, "message": "Graph, position, gear, evidence, and intent context assembled.", "updated_at": utc_now()})
         db.save_action(action, idempotency_key)

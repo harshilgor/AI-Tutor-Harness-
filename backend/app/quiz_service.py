@@ -86,7 +86,9 @@ class QuizService:
         index = len([a for a in first if not a.get("retryOf")]) % len(quiz["conceptIds"])
         concept_id = recent["conceptId"] if recent and recent["score"] is not None and recent["score"] < .5 else quiz["conceptIds"][index]
         concept = next(c for c in graph.concepts if c.id == concept_id)
-        sources = retrieve(self.store, owner, session.id, f"{session.goal} {concept.title} {concept.summary}", selected_span_ids=quiz.get("selectedSpanIds"))
+        sources = retrieve(self.store, owner, session.id, f"{session.goal} {concept.title} {concept.summary}",
+                           selected_span_ids=quiz.get("selectedSpanIds"),
+                           metadata_scope={"conceptId": concept.id, "courseId": session.course_id})
         manifest = save_manifest(self.store, owner, session.id, concept.title, sources, selected_span_ids=quiz.get("selectedSpanIds"))
         difficulty = quiz["difficulty"]
         if difficulty == "adaptive":

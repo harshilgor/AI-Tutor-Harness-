@@ -1,10 +1,11 @@
 import { apiBaseUrl, request, type Gear } from './api';
+import type { VisualType } from './visualization-spec';
 
 export type GenerationMode = 'ask' | 'learn';
-export type GenerationRequest = { mode: GenerationMode; message: string; gear: Gear; expectedRevision: number; action?: 'message' | 'start' | 'next' | 'repair'; noteContext?: unknown; selectedSpanIds?: string[]; selectedText?: string; selectedLessonId?: string; selectedBlockId?: string };
+export type GenerationRequest = { mode: GenerationMode; message: string; gear: Gear; expectedRevision: number; action?: 'message' | 'start' | 'next' | 'repair'; visualType?: VisualType | 'auto'; noteContext?: unknown; selectedSpanIds?: string[]; selectedText?: string; selectedLessonId?: string; selectedBlockId?: string };
 export type GenerationEvent = { generationId: string; sequence: number; type: string; data: Record<string, unknown> };
 export type GenerationUsage = { totalTokens: number; promptTokens?: number | null; completionTokens?: number | null; usageSource: 'exact' | 'estimated'; provider?: string | null; model?: string | null };
-export type GenerationDescriptor = { id: string; sessionId: string; mode: GenerationMode; status: string; sequence: number; provider: string; model: string; finalRevision?: number | null; errorCode?: string | null; metrics?: Record<string, number | string | boolean | null> | null };
+export type GenerationDescriptor = { id: string; sessionId: string; mode: GenerationMode; status: string; sequence: number; provider: string; model: string; journeyRevision?: number | null; finalRevision?: number | null; errorCode?: string | null; metrics?: Record<string, number | string | boolean | null> | null };
 export type GenerationCallbacks = { onEvent: (event: GenerationEvent) => void; onReconnect?: () => void; onDescriptor?: (descriptor: GenerationDescriptor) => void; onSequence?: (sequence: number) => void };
 
 function headers(extra: HeadersInit = {}): Headers {

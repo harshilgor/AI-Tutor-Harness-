@@ -226,6 +226,20 @@ class ConceptTrust(ApiModel):
     reviewed_at: datetime | None = None
 
 
+class LessonPart(ApiModel):
+    kind: Literal["text", "visualization"]
+    text: str | None = None
+    visualization_id: str | None = None
+
+    @model_validator(mode="after")
+    def exactly_one_payload(self):
+        if self.kind == "text" and self.text is None:
+            raise ValueError("text part requires text")
+        if self.kind == "visualization" and self.visualization_id is None:
+            raise ValueError("visualization part requires a reference")
+        return self
+
+
 class LessonBlock(ApiModel):
     id: str
     kind: Literal["explanation", "example", "analogy", "visual", "check", "reflection", "source_note"]
@@ -236,6 +250,8 @@ class LessonBlock(ApiModel):
     trust: ConceptTrust = Field(default_factory=ConceptTrust)
     order: int = Field(ge=0)
     metadata: dict[str, Any] = Field(default_factory=dict)
+    visualizations: list[dict[str, Any]] = Field(default_factory=list, max_length=4)
+    parts: list[LessonPart] = Field(default_factory=list, max_length=30)
 
 
 class LessonArtifact(ApiModel):

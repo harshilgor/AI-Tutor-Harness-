@@ -129,6 +129,9 @@
   font-size: 0.9rem;
   color: #394731;
 }
+:global(.dark) .hero,:global(.dark) .card,:global(.dark) .resume,:global(.dark) .remediation{border-color:var(--border);background:var(--card);color:var(--foreground)}
+:global(.dark) .launch select,:global(.dark) .answerLabel textarea,:global(.dark) .option,:global(.dark) .optionOn{border-color:var(--border);background:var(--secondary);color:var(--foreground)}
+:global(.dark) .stats,:global(.dark) .chips li{color:var(--foreground)}
 
 .sessionHeader {
   display: flex;

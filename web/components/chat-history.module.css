@@ -35,3 +35,10 @@
 .retry:hover{background:#edf0e7}
 @media(prefers-reduced-motion:reduce){.skeleton{animation:none}}
 @media(hover:none){.dots{opacity:.55;pointer-events:auto}.title{-webkit-mask-image:linear-gradient(to right,#000 0%,#000 calc(100% - 34px),transparent 100%);mask-image:linear-gradient(to right,#000 0%,#000 calc(100% - 34px),transparent 100%)}}
+:global(.dark) .search,:global(.dark) .menu,:global(.dark) .renameForm input,:global(.dark) .retry{border-color:var(--border);background:var(--card);color:var(--foreground)}
+:global(.dark) .search input{color:var(--foreground)}
+:global(.dark) .dots,:global(.dark) .item.active~.dots,:global(.dark) .row:has(.item.active) .dots,:global(.dark) .row:hover .dots,:global(.dark) .row:focus-within .dots{background:var(--accent);color:var(--accent-foreground);box-shadow:-10px 0 12px 4px var(--accent)}
+:global(.dark) .menu button{color:var(--foreground)}
+:global(.dark) .menu button:hover,:global(.dark) .retry:hover{background:var(--accent)}
+:global(.dark) .state strong{color:var(--foreground)}
+:global(.dark) .skeleton{background:linear-gradient(90deg,var(--muted) 25%,var(--secondary) 50%,var(--muted) 75%);background-size:200% 100%}

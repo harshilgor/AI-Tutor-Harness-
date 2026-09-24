@@ -27,3 +27,7 @@
 .studyBarMode select{flex:none;height:28px;border:1px solid #dfe5dc;border-radius:6px;background:#fff;color:#4e5e47;font-size:11px;padding:0 6px}
 .studyBar .error{margin:0;font-size:11px}
 .courseTag{display:inline-flex;align-items:center;gap:4px;padding:2px 6px;border-radius:4px;background:#e9eee3;color:#3d4a37;font-size:11px;font-weight:550}
+:global(.dark) .banner,:global(.dark) .proposal,:global(.dark) .editor,:global(.dark) .studyBar,:global(.dark) .studyBarMode select,:global(.dark) .notePicker,:global(.dark) .noteReceipt pre{border-color:var(--border);background:var(--card);color:var(--foreground)}
+:global(.dark) .banner strong,:global(.dark) .proposalHead strong,:global(.dark) .proposalHead small,:global(.dark) .proposalEyebrow,:global(.dark) .why,:global(.dark) .preview,:global(.dark) .studyBar,:global(.dark) .studyBarLink,:global(.dark) .studyBarMode select,:global(.dark) .noteReceipt>span,:global(.dark) .noteReceipt span button:first-child,:global(.dark) .notePicker button,:global(.dark) .noteDraft,:global(.dark) .noteDraft pre,:global(.dark) .noteDraft p,:global(.dark) .sourceChip{color:var(--foreground)}
+:global(.dark) .updated,:global(.dark) .courseTag,:global(.dark) .noteReceipt>span,:global(.dark) .noteDraft,:global(.dark) .sourceChip{border-color:var(--border);background:var(--secondary)}
+:global(.dark) .studyBarLink:hover,:global(.dark) .updated button:hover,:global(.dark) .notePicker button:hover,:global(.dark) .sourceChip:hover{background:var(--accent)}

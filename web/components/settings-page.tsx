@@ -1,7 +1,8 @@
 "use client";
 
 import { useEffect, useState } from 'react';
-import { ArrowLeft, Bell, CircleHelp, Database, Gauge, KeyRound, Settings2 } from 'lucide-react';
+import { useTheme } from 'next-themes';
+import { ArrowLeft, Bell, CircleHelp, Database, Gauge, KeyRound, Moon, Settings2, Sun } from 'lucide-react';
 import { ProviderSettings } from './provider-settings';
 import { UsageSettings } from './usage-settings';
 import { ReviewNotificationSettings } from './review-notification-settings';
@@ -35,6 +36,8 @@ export function SettingsPage({ category, onCategoryChange, onBack }: {
   onBack: () => void;
 }) {
   const [desktop, setDesktop] = useState(false);
+  const { theme, setTheme } = useTheme();
+  const selectedTheme = theme ?? 'light';
   useEffect(() => {
     const timer = window.setTimeout(() => setDesktop(hasDesktopPreferences()), 0);
     return () => window.clearTimeout(timer);
@@ -63,7 +66,19 @@ export function SettingsPage({ category, onCategoryChange, onBack }: {
           {category === 'general' ? (
             <section aria-label="General settings">
               <h1>General</h1>
-              <p className={styles.lede}>Application updates for this device.</p>
+              <p className={styles.lede}>Choose how Open Learn looks on this device.</p>
+              <div className={styles.card}>
+                <h2 className={styles.preferenceTitle}>Appearance</h2>
+                <p className={styles.preferenceHelp}>Set a theme for the workspace. Your choice is saved in this browser.</p>
+                <div className={styles.themeChoices} role="group" aria-label="Color theme">
+                  <button type="button" aria-pressed={selectedTheme === 'light'} className={styles.themeChoice + (selectedTheme === 'light' ? ' ' + styles.themeChoiceActive : '')} onClick={() => setTheme('light')}>
+                    <Sun size={17} />Light
+                  </button>
+                  <button type="button" aria-pressed={selectedTheme === 'dark'} className={styles.themeChoice + (selectedTheme === 'dark' ? ' ' + styles.themeChoiceActive : '')} onClick={() => setTheme('dark')}>
+                    <Moon size={17} />Dark
+                  </button>
+                </div>
+              </div>
               <div className={styles.group}>
                 <UpdateSection />
                 {!desktop ? <p className={styles.muted}>Update checks are available in the desktop app.</p> : null}

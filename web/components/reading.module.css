@@ -32,6 +32,12 @@
 .table th { background: #eef3e9; }
 .detail { margin: .9em 0; border: 1px solid #e0e5dc; border-radius: 10px; padding: 10px 14px; }
 .detail summary { color: #52634c; font-weight: 550; cursor: pointer; }
+:global(.dark) .rich,:global(.dark) .equation{color:var(--foreground)}
+:global(.dark) .rich strong,:global(.dark) .detail,:global(.dark) .blockTools button{border-color:var(--border);background:var(--secondary);color:var(--foreground)}
+:global(.dark) .rich blockquote,:global(.dark) .rich :not(pre) > code,:global(.dark) .rich :global(.katex-error),:global(.dark) .code,:global(.dark) .toolbar select{border-color:var(--border);background:var(--muted);color:var(--foreground)}
+:global(.dark) .codeTop,:global(.dark) .table,:global(.dark) .table th,:global(.dark) .table td{border-color:var(--border)}
+:global(.dark) .table th,:global(.dark) .toolbar select{background:var(--secondary);color:var(--foreground)}
+:global(.dark) .detail summary,:global(.dark) .block h2,:global(.dark) .toolbar,:global(.dark) .blockTools button{color:var(--foreground)}
 .detail[open] summary { margin-bottom: 12px; }
 .toolbar { display: flex; flex-wrap: wrap; align-items: center; gap: 14px; margin: 0 0 16px; color: #68715e; font-size: 13px; }
 .toolbar select { background: #f7f8f4; border: 1px solid #dce2d6; border-radius: 7px; padding: 5px 8px; margin-left: 7px; color: #35432f; }

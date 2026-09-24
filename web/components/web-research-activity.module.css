@@ -82,6 +82,9 @@
 .errorText {
   color: #983b30;
 }
+:global(.dark) .activityContainer,:global(.dark) .sourceBadge{border-color:var(--border);background:var(--card);color:var(--foreground)}
+:global(.dark) .activityContainer:hover{background:var(--secondary)}
+:global(.dark) .titleRow,:global(.dark) .subtitle{color:var(--foreground)}
 
 /* Reduced motion overrides */
 @media (prefers-reduced-motion: reduce) {

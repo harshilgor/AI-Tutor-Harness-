@@ -151,11 +151,16 @@ class _StubJourney:
     def __init__(self, *args, **kwargs):
         pass
 
-    def prepare_stream(self, owner, session_id, request):
-        return {"prompt": "p", "sources": [], "actionId": "a", "title": "T"}
+    def prepare_stream(self, owner, session_id, request, cancel_check=None, on_event=None, generation_id=None):
+        from backend.app.context_engine import GenerationContext
+        context = GenerationContext("instruction", (), (), "hi", 10, 12000, ())
+        return {"prompt": "p", "generationContext": context, "sources": [], "actionId": "a", "title": "T"}
 
-    def commit_stream(self, connection, owner, prepared, request, body):
+    def commit_stream(self, connection, owner, prepared, request, body, visualizations=None):
         return SimpleNamespace(id="lesson_1"), {"revision": 1, "sessionId": "session-1"}
+
+    def finish_stream_turn(self, *args, **kwargs):
+        pass
 
 
 def test_streaming_run_persists_exact_usage_and_completed_event(tmp_path, monkeypatch):

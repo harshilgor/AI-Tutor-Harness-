@@ -1,0 +1,7 @@
+.page{width:min(920px,100%);margin:0 auto;padding:40px 24px 96px;color:var(--foreground)}
+.page>a{color:var(--muted-foreground);font-size:13px;text-decoration:none}
+.eyebrow{margin:28px 0 8px;color:var(--muted-foreground);font-size:11px;font-weight:650;letter-spacing:.1em}
+.heading{display:flex;align-items:end;justify-content:space-between;gap:16px}.heading button{flex:none;border:1px solid var(--border);border-radius:8px;background:var(--card);color:var(--foreground);padding:8px 12px;font-size:12px}
+.page h1{margin:0;font-size:clamp(28px,5vw,40px);letter-spacing:-.035em}
+.intro{max-width:620px;margin:10px 0 28px;color:var(--muted-foreground);font-size:14px;line-height:1.6}
+@media(max-width:600px){.page{padding:24px 14px 64px}.heading{align-items:center}}

@@ -128,12 +128,12 @@ class SessionSnapshotService:
         position = min(int(journey.get("position") or 0), max(0, len(steps) - 1))
         step = steps[position] if steps else {}
         turns = journey.get("turns") or []
-        last = turns[-1] if turns else None
+        last = next((turn for turn in reversed(turns) if turn.get("lesson")), None)
         lesson = (last or {}).get("lesson") or {}
         last_turn = None
         if last:
             last_turn = SessionTurnSummary(
-                index=len(turns) - 1,
+                index=turns.index(last),
                 lesson_id=lesson.get("id"),
                 concept_id=lesson.get("conceptId"),
                 mode=last.get("mode"),

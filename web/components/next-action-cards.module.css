@@ -69,3 +69,6 @@
   max-width: 62ch;
   line-height: 1.5;
 }
+:global(.dark) .action{color:var(--foreground)}
+:global(.dark) .action:hover:not(:disabled){background:var(--accent);color:var(--accent-foreground)}
+:global(.dark) .why{color:var(--muted-foreground)}

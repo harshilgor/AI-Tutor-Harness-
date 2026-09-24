@@ -132,6 +132,8 @@ export type LessonBlock = {
   sourceIds: string[];
   trust: ConceptTrust;
   order: number;
+  visualizations?: unknown[];
+  parts?: Array<{ kind: 'text' | 'visualization'; text?: string | null; visualizationId?: string | null }>;
 };
 
 export type LessonArtifact = {
@@ -784,6 +786,17 @@ export const learningApi = {
 
   explainLesson(lessonId: string, input: { blockId: string; selectedText: string; mode?: 'explain' | 'simpler' | 'example' | 'symbols' | 'why' }, options?: { signal?: AbortSignal }): Promise<{ blocks: Array<{ heading: string; body: string }> }> {
     return request(`/v1/lessons/${encodeURIComponent(lessonId)}/explanations`, { method: 'POST', signal: options?.signal, body: JSON.stringify(input) });
+  },
+  getLessonVisualization(lessonId: string, visualizationId: string): Promise<unknown> {
+    return request(`/v1/lessons/${encodeURIComponent(lessonId)}/visualizations/${encodeURIComponent(visualizationId)}`);
+  },
+  changeLessonVisualization(lessonId: string, visualizationId: string, change: {
+    operation: 'change_parameter' | 'annotate' | 'set_domain'; expectedRevision: number;
+    parameterId?: string; value?: number; annotation?: unknown; xDomain?: [number, number];
+  }): Promise<unknown> {
+    return request(`/v1/lessons/${encodeURIComponent(lessonId)}/visualizations/${encodeURIComponent(visualizationId)}`, {
+      method: 'PATCH', body: JSON.stringify(change),
+    });
   },
 
   teachingAction(sessionId: string, input: TeachingActionInput, options?: { signal?: AbortSignal; idempotencyKey?: string }): Promise<RunStatus> {

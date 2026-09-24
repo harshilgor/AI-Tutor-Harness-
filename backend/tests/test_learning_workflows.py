@@ -28,7 +28,7 @@ class Provider:
 
     def complete_json(self, prompt, max_tokens=4000):
         self.prompts.append(prompt)
-        data = json.loads(prompt.split('\n', 1)[1])
+        data, _ = json.JSONDecoder().raw_decode(prompt.split('\n', 1)[1])
         if prompt.startswith("Propose"):
             return {"steps": [{"conceptId": data["concepts"][0]["id"], "title": "Conditional populations", "objective": "Explain why conditioning changes the population."}]}
         if prompt.startswith("You author"):
@@ -176,6 +176,52 @@ def test_journey_sends_only_explicit_note_context_as_untrusted_data(env, monkeyp
     assert "text" not in receipt["notes"][0]
 
 
+def test_nonstreaming_journey_passes_structured_context_to_capable_provider(env):
+    from backend.app.context_engine import GenerationContext
+
+    client, _, provider, session = env
+    captured = []
+    provider.supports_generation_context = True
+
+    def complete_json(prompt, max_tokens=4000):
+        captured.append(prompt)
+        return {"blocks": [{"kind": "explanation", "heading": "Answer", "body": "A focused answer."}]}
+
+    provider.complete_json = complete_json
+    result = command(client, f"/sessions/{session.id}/journey", {
+        "mode": "ask", "message": "Explain the denominator", "expectedRevision": 1,
+    })
+
+    assert result["status"] == "completed"
+    assert isinstance(captured[-1], GenerationContext)
+    assert captured[-1].current_user_message == "Explain the denominator"
+
+
+def test_failed_compaction_never_silently_drops_older_journey_turns(env):
+    from backend.app.assessment_models import JourneyCommand
+    from backend.app.journey_service import JourneyService
+    from backend.app.model_provider import ModelProviderError
+    from backend.app.workflow_store import WorkflowStore
+
+    _, store, provider, session = env
+    provider.context_input_budget_tokens = 6000
+    turns = [{"question": f"Earlier fact {index}", "mode": "ask", "sessionId": session.id,
+              "lesson": {"blocks": [{"heading": "Answer", "body": "context " * 130}]}}
+             for index in range(25)]
+    journey = {"id": f"journey_{session.id}", "sessionId": session.id, "mode": "ask",
+               "gear": "Guided", "goal": session.goal, "status": "new", "steps": [],
+               "position": 0, "turns": turns}
+    with store.transaction() as conn:
+        WorkflowStore(store).put(conn, "local", "journey", journey, session.id)
+    # This fixture's provider does not implement the compaction schema. The
+    # request must fail clearly instead of sending a prompt missing old turns.
+    with pytest.raises(ModelProviderError, match="could not be preserved"):
+        JourneyService(store, provider).prepare_stream(
+            "local", session.id,
+            JourneyCommand(mode="ask", message="Recall earlier fact 0", expected_revision=1),
+        )
+
+
 def test_queued_job_recovery_and_conflicting_key(env):
     client, store, _, session = env
     from backend.app.workflow_store import WorkflowStore
@@ -197,15 +243,254 @@ def test_streamed_ask_persists_a_canonical_turn_and_replays(env):
     created = client.post(f"/v1/sessions/{session.id}/generations", json=payload, headers={"Idempotency-Key": "stream-one"})
     assert created.status_code == 202, created.text
     generation = created.json()
+    assert generation["journeyRevision"] == 1
     duplicate = client.post(f"/v1/sessions/{session.id}/generations", json=payload, headers={"Idempotency-Key": "stream-one"})
     assert duplicate.json()["id"] == generation["id"]
+    assert duplicate.json()["journeyRevision"] == generation["journeyRevision"]
     response = client.get(f"/v1/generations/{generation['id']}/events")
     assert response.status_code == 200
     assert response.headers["content-type"].startswith("text/event-stream")
     assert response.headers["cache-control"] == "no-cache, no-transform"
     assert response.headers["x-accel-buffering"] == "no"
     assert "event: text.delta" in response.text and "event: generation.completed" in response.text
+    assert "event: visualization.planning" not in response.text
     saved = client.get(f"/v1/sessions/{session.id}/journey").json()
+    assert len(saved["turns"]) == 1
+    assert saved["turns"][-1]["generationId"] == generation["id"]
+    assert saved["turns"][-1]["status"] == "completed"
     assert saved["turns"][-1]["lesson"]["blocks"][0]["body"].startswith("Conditioning changes")
     descriptor = client.get(f"/v1/generations/{generation['id']}").json()
     assert descriptor["metrics"]["applicationTtftSeconds"] >= 0
+
+
+def test_context_inspector_exposes_provider_fingerprint_and_source_decisions(env, monkeypatch):
+    client, _, _, session = env
+    monkeypatch.setenv("AI_TUTOR_DEV_CONTEXT_INSPECTOR", "1")
+    created = client.post(f"/v1/sessions/{session.id}/generations", json={
+        "mode": "ask", "message": "Explain the conditioning population using the attached reference.",
+        "gear": "Guided", "expectedRevision": 1,
+    }, headers={"Idempotency-Key": "inspect-provenance"})
+    assert created.status_code == 202, created.text
+    generation_id = created.json()["id"]
+    client.get(f"/v1/generations/{generation_id}/events")
+
+    response = client.get(f"/v1/generations/{generation_id}/context")
+    assert response.status_code == 200, response.text
+    context = response.json()
+    assert context["contextVersion"] == context["providerInputSha256"]
+    assert context["providerInputFingerprintKind"] == "provider_model_and_serialized_payload_sha256"
+    assert context["providerInputStored"] is False
+    sources = next(item for item in context["blockDecisions"] if item["kind"] == "sources")
+    assert sources["relevanceScore"] > 0
+    assert any(value.startswith("spanId:") for value in sources["sourceIds"])
+    assert sources["contentSha256"]
+
+
+def test_twenty_five_turn_compaction_preserves_provider_payload_and_reconnect_state(env, monkeypatch):
+    """Exercise the canonical UI/API generation path through multiple compactions."""
+    from backend.app.context_engine import GenerationContext
+    from backend.app.context_provenance import provider_input_fingerprint
+    from backend.app.model_provider import OpenRouterLessonProvider
+
+    client, _, provider, session = env
+    provider.provider_name = "openrouter/test"
+    provider.model = "test-model"
+    provider.context_input_budget_tokens = 4500
+    provider.supports_generation_context = True
+    provider.payloads = []
+    provider_input_adapter = OpenRouterLessonProvider("test-key", "test-model", None, None)
+    long_answer = "This worked example preserves the learner's earlier definitions and steps. " * 32
+
+    def compact_json(prompt, max_tokens=4000):
+        if prompt.startswith("Update compact conversation state"):
+            data = json.loads(prompt.split("\n", 1)[1])
+            prior = data["priorState"]
+            user = data["turn"]["user"]
+            facts = list(prior.get("userFacts", []))
+            if user:
+                facts.append(user)
+            return {"topic": "conditional probability", "userFacts": facts,
+                    "constraints": [], "preferences": [], "decisions": [],
+                    "unresolvedQuestions": [], "currentThread": "coin flips",
+                    "summary": "Learner is studying conditional probability with a retained cue."}
+        return {"blocks": [{"kind": "explanation", "heading": "Worked example", "body": long_answer}]}
+
+    provider.complete_json = compact_json
+
+    def streaming_payload(prompt, max_tokens, images=None):
+        return provider_input_adapter.streaming_payload(prompt, max_tokens, images)
+
+    provider.streaming_payload = streaming_payload
+
+    async def stream_text(prompt, max_tokens=4000, **kwargs):
+        payload = streaming_payload(prompt, max_tokens, kwargs.get("images"))
+        provider.payloads.append((prompt, payload))
+        yield long_answer
+
+    provider.stream_text = stream_text
+    monkeypatch.setenv("AI_TUTOR_DEV_CONTEXT_INSPECTOR", "1")
+
+    cue = "My memory cue is the violet lighthouse; remember that exact phrase."
+    observed = []
+    for index in range(25):
+        message = cue if index == 0 else f"Turn {index + 1}: connect this follow-up to the earlier conditional probability lesson."
+        journey = client.get(f"/v1/sessions/{session.id}/journey").json()
+        created = client.post(f"/v1/sessions/{session.id}/generations", json={
+            "mode": "ask", "message": message, "gear": "Guided",
+            "expectedRevision": journey["revision"],
+        }, headers={"Idempotency-Key": f"long-context-{index}"})
+        assert created.status_code == 202, created.text
+        generation_id = created.json()["id"]
+        events = client.get(f"/v1/generations/{generation_id}/events")
+        assert events.status_code == 200 and "event: generation.completed" in events.text
+        inspection = client.get(f"/v1/generations/{generation_id}/context").json()
+        prompt, payload = provider.payloads[-1]
+        assert isinstance(prompt, GenerationContext)
+        assert payload["messages"][0]["role"] == "system"
+        assert payload["messages"][1]["role"] == "user"
+        assert "Supporting reference data" in payload["messages"][1]["content"]
+        assert payload["messages"][-1] == {"role": "user", "content": message}
+        assert inspection["providerInputSha256"] == provider_input_fingerprint(
+            "openrouter/test", "test-model", payload,
+        )
+        observed.append((inspection, payload))
+
+    compacted = [(inspection, payload) for inspection, payload in observed
+                 if inspection.get("summaryUsed")]
+    assert len(provider.payloads) == 25
+    assert compacted, "a twenty-five-turn run must compact older turns"
+    final_state = next(block for block in compacted[-1][1]["messages"][1:]
+                       if block.get("role") == "user" and "conversationState" in block.get("content", ""))
+    assert cue in final_state["content"]
+    assert observed[-1][0]["estimatedInputTokens"] <= 4500
+    saved = client.get(f"/v1/sessions/{session.id}/journey").json()
+    assert len(saved["turns"]) == 25
+    assert saved["turns"][0]["question"] == cue
+
+
+def test_two_tabs_racing_one_session_cannot_start_a_second_generation(env):
+    import threading
+
+    client, _, provider, session = env
+    entered = threading.Event()
+    release = threading.Event()
+
+    async def slow_stream(prompt, max_tokens=4000, **kwargs):
+        entered.set()
+        await __import__("asyncio").to_thread(release.wait, 5)
+        yield "A short answer after the race is resolved."
+
+    provider.stream_text = slow_stream
+    first = client.post(f"/v1/sessions/{session.id}/generations", json={
+        "mode": "ask", "message": "First tab asks a question.", "gear": "Guided", "expectedRevision": 1,
+    }, headers={"Idempotency-Key": "tab-race-first"})
+    assert first.status_code == 202
+    assert entered.wait(2)
+    second = client.post(f"/v1/sessions/{session.id}/generations", json={
+        "mode": "ask", "message": "Second tab races with a question.", "gear": "Guided", "expectedRevision": 1,
+    }, headers={"Idempotency-Key": "tab-race-second"})
+    assert second.status_code == 409
+    assert second.json()["detail"]["code"] == "generation_in_progress"
+    release.set()
+    completed = client.get(f"/v1/generations/{first.json()['id']}/events")
+    assert "event: generation.completed" in completed.text
+
+
+def test_semantic_embedding_api_failure_falls_back_to_lexical_retrieval(env, monkeypatch):
+    import httpx
+    from backend.app import context_service
+
+    _, store, _, session = env
+    monkeypatch.setattr(context_service, "configured_model", lambda: "test-embedding-model")
+
+    def unavailable(*args, **kwargs):
+        raise httpx.ConnectError("embedding endpoint unavailable")
+
+    monkeypatch.setattr(context_service, "similarity_scores", unavailable)
+    results = context_service.retrieve(store, "local", session.id, "conditional probability restricts population")
+    assert results
+    assert all(item["retrieval"] == "lexical_ranked" for item in results)
+    assert all(item["lexicalScore"] > 0 for item in results)
+
+
+def test_visualization_streams_persists_reopens_and_updates(env):
+    client, _, provider, session = env
+    original_complete = provider.complete_json
+
+    def complete_json(prompt, max_tokens=4000):
+        if prompt.startswith("You are the tutor's visual planner."):
+            return {"visualizations": [{"version": 1, "id": "lesson-square", "type": "function",
+                "title": "A square function", "series": [{"name": "y = x²", "expression": "x^2"}],
+                "xDomain": [-5, 5]}]}
+        return original_complete(prompt, max_tokens)
+
+    provider.complete_json = complete_json
+    created = client.post(f"/v1/sessions/{session.id}/generations",
+        json={"mode": "learn", "message": "Plot y = x squared", "gear": "Guided", "expectedRevision": 1},
+        headers={"Idempotency-Key": "visual-stream-one"})
+    assert created.status_code == 202, created.text
+    generation_id = created.json()["id"]
+    events = client.get(f"/v1/generations/{generation_id}/events")
+    assert "event: visualization.planning" in events.text
+    assert "event: visualization.ready" in events.text
+
+    journey = client.get(f"/v1/sessions/{session.id}/journey").json()
+    lesson = journey["turns"][-1]["lesson"]
+    visual = lesson["blocks"][0]["visualizations"][0]
+    assert lesson["blocks"][0]["parts"][-1]["visualizationId"] == visual["id"]
+    path = f"/v1/lessons/{lesson['id']}/visualizations/{visual['id']}"
+    assert client.get(path).json()["revision"] == 1
+
+    updated = client.patch(path, json={"operation": "set_domain", "expectedRevision": 1, "xDomain": [-2, 2]})
+    assert updated.status_code == 200, updated.text
+    assert updated.json()["revision"] == 2 and updated.json()["xDomain"] == [-2, 2]
+    assert client.get(path).json()["revision"] == 2
+    reopened = client.get(f"/v1/sessions/{session.id}/journey").json()
+    assert reopened["turns"][-1]["lesson"]["blocks"][0]["visualizations"][0]["revision"] == 2
+    assert client.get(path, headers={"X-Dev-Learner-Id": "other"}).status_code == 404
+
+
+def test_submitted_turn_survives_failure_and_restart(env):
+    client, store, provider, session = env
+    from backend.app.generation_models import GenerationRequest
+    from backend.app.generation_store import GenerationStore
+    from backend.app.journey_service import JourneyService
+
+    request = GenerationRequest(mode="ask", message="Please explain the denominator", gear="Guided", expected_revision=1)
+    records = GenerationStore(store)
+    journey_service = JourneyService(store, provider)
+    record = records.create("local", session.id, request.model_dump(mode="json", by_alias=True), "durable-failure",
+        provider.provider_name, "test", on_create=lambda conn, generation_id: journey_service.submit_stream_turn(conn, "local", session.id, request, generation_id))
+    assert record["journeyRevision"] == 1
+    assert client.get(f"/v1/sessions/{session.id}/journey").json()["turns"][-1]["status"] == "pending"
+    assert records.create("local", session.id, request.model_dump(mode="json", by_alias=True), "durable-failure",
+        provider.provider_name, "test", on_create=lambda conn, generation_id: None)["id"] == record["id"]
+    assert len(client.get(f"/v1/sessions/{session.id}/journey").json()["turns"]) == 1
+
+    records.interrupt_active()
+    interrupted = client.get(f"/v1/sessions/{session.id}/journey").json()
+    assert interrupted["turns"][-1]["status"] == "interrupted"
+    assert interrupted["turns"][-1]["errorCode"] == "STREAM_INTERRUPTED"
+    assert interrupted["revision"] == 2
+
+
+def test_failed_provider_keeps_submitted_turn_and_allows_next_revision(env):
+    client, _, provider, session = env
+
+    async def failing_stream(*args, **kwargs):
+        raise RuntimeError("upstream unavailable")
+        yield ""  # Keep this an async generator.
+
+    provider.stream_text = failing_stream
+    first = client.post(f"/v1/sessions/{session.id}/generations", json={
+        "mode": "ask", "message": "Explain the denominator", "gear": "Guided", "expectedRevision": 1,
+    }, headers={"Idempotency-Key": "provider-fails"})
+    assert first.status_code == 202, first.text
+    generation_id = first.json()["id"]
+    events = client.get(f"/v1/generations/{generation_id}/events")
+    assert "event: generation.error" in events.text
+    journey = client.get(f"/v1/sessions/{session.id}/journey").json()
+    assert journey["turns"][-1]["question"] == "Explain the denominator"
+    assert journey["turns"][-1]["status"] == "failed"
+    assert journey["turns"][-1]["generationId"] == generation_id
+    assert journey["revision"] == 2
