@@ -1,4 +1,4 @@
-# AI Tutor Harness · Forma
+# OpenLearn
 
 Forma is a local-first AI learning environment for exploring a topic, learning through a guided conversation, working from your own material, and checking understanding without losing context.
 
