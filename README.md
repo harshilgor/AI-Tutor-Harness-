@@ -14,11 +14,14 @@ cd Open-Learn
 .\install-local.ps1
 ```
 
-The script installs what Open Learn needs and starts it. Then open [http://127.0.0.1:3000](http://127.0.0.1:3000). Run `Ctrl+C` in PowerShell to stop.
+The script installs what Open Learn needs and starts it. 
 
-No AI key is needed to try the built-in tutor. To connect a model provider, open **Settings → API keys** after the app starts.
+- Then open [http://127.0.0.1:3000](http://127.0.0.1:3000).
+- If you want to stop it Run `Ctrl+C` in PowerShell to stop.
 
-> **Desktop installers aren’t available yet.** For macOS or Linux setup, see the [installation guide](docs/INSTALL.md).
+API Key 
+
+- To start using OpenLearn, connect a model provider; open **Settings → API keys** after the app starts.
 
 ## What you can do
 
