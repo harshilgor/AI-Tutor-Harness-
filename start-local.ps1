@@ -4,7 +4,7 @@ $projectRoot = $PSScriptRoot
 $runtime = Join-Path $projectRoot 'backend\.venv\Scripts\python.exe'
 $logRoot = Join-Path $projectRoot 'work\local-runtime'
 New-Item -ItemType Directory -Path $logRoot -Force | Out-Null
-if (-not (Test-Path -LiteralPath $runtime)) { throw 'Install the backend project environment first. See outputs/Materials_Implementation_Status.md.' }
+if (-not (Test-Path -LiteralPath $runtime)) { throw 'Install the local dependencies with .\install-local.ps1 first. See docs\INSTALL.md for help.' }
 
 function Test-LocalService([string]$Address) {
     try { return (Invoke-WebRequest -Uri $Address -UseBasicParsing -NoProxy -TimeoutSec 3).StatusCode -eq 200 }

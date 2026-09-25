@@ -1,32 +1,49 @@
-# Installing Forma Desktop
+# Install Open Learn
 
-Select **Download Open Learn** in the [project README](../README.md), or open the [GitHub Releases page](https://github.com/harshilgor/Open-Learn/releases). Choose the newest published release that includes installers, then download the file for your operating system. Beta versions may be marked **Pre-release**. Installer downloads will appear after the first signed release is published.
+Open Learn does not currently include a ready-to-install desktop package. You can run it locally from the source code.
 
 ## Windows
 
-Download the signed Windows x64 installer, run it, and launch Forma from the Start menu. The app starts its local learning service automatically. Verify the installer hash against the release's `SHA256SUMS` file before installation.
+Install [Git](https://git-scm.com/download/win), [Node.js 22.13 or newer](https://nodejs.org/), and [Python 3.12 or newer](https://www.python.org/downloads/). During Python setup, enable **Add Python to PATH**.
 
-## macOS
-
-Download the signed and notarized installer for Apple Silicon or Intel, open it, and drag Forma to Applications. Verify the installer hash against the release's `SHA256SUMS` file before installation.
-
-## Development install
-
-Contributors can run the existing local services and desktop shell from a checkout:
+Open PowerShell and run:
 
 ```powershell
-./start-local.ps1
-cd desktop
-npm install
-npm run dev
+git clone https://github.com/harshilgor/Open-Learn.git
+cd Open-Learn
+.\install-local.ps1
 ```
 
-The development shell uses the local API on `127.0.0.1:8000` and the web interface on `127.0.0.1:3000`. User-facing releases will bundle both services and will not require Python, Node, Git, or a terminal.
+The first run installs the required packages and starts the app. Later runs reuse them. Open [http://127.0.0.1:3000](http://127.0.0.1:3000). Press `Ctrl+C` in PowerShell to stop.
 
-## Local data
+## macOS and Linux
 
-Learner data is stored in the operating system's Forma application-data directory. Provider keys are stored using the operating system's encrypted credential facility. Open **Your workspace** in the desktop sidebar to configure providers, opt in to review reminders, export a JSON archive, or delete local learner data. Review reminders are off until you enable them.
+Install Git, Node.js 22.13 or newer, and Python 3.12 or newer. Open two terminal windows in the cloned project.
+
+In the first terminal, install and start the local service:
+
+```bash
+python3 -m venv backend/.venv
+backend/.venv/bin/python -m pip install -r backend/requirements.txt
+backend/.venv/bin/python -m uvicorn backend.app.main:app --host 127.0.0.1 --port 8000
+```
+
+In the second terminal, start the web app:
+
+```bash
+cd web
+npm ci
+npm run dev -- --hostname 127.0.0.1 --port 3000
+```
+
+Then open [http://127.0.0.1:3000](http://127.0.0.1:3000). Keep both terminal windows open while using Open Learn.
+
+## AI provider (optional)
+
+The built-in tutor works without an API key. To use a model provider, start Open Learn, open **Settings → API keys**, and add your provider key. It is stored locally and is not committed or sent to the web app.
 
 ## Troubleshooting
 
-If Forma cannot start, close any development server already using the configured ports and restart the application. The local service is loopback-only and retries an unexpected sidecar exit automatically. Development logs are stored in `work/local-runtime`; packaged builds show a startup error dialog with the recovery message.
+- If setup says Python or Node is too old, install the required version and open a new PowerShell window.
+- If the app says a port is already in use, close the other app using port `3000` or `8000`, then try again.
+- If setup fails, run `install-local.ps1` again after fixing the reported issue; it will reuse dependencies that are already installed.
