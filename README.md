@@ -6,6 +6,10 @@ It is built around a simple idea: an AI tutor should support deliberate learning
 
 > **Project status:** local desktop beta. The application is functional for local learning workflows; hosted accounts, multi-device sync, retrieval-backed verification, calibrated mastery, and automatic updates are not included.
 
+[![Download Open Learn](https://img.shields.io/badge/Download-Open%20Learn-2563eb?style=for-the-badge)](https://github.com/harshilgor/Open-Learn/releases)
+
+Open the newest published release and download the installer for your operating system. Open the downloaded file to install Forma; no terminal or development tools are needed. See the [installation guide](docs/INSTALL.md) for platform-specific steps. Installer downloads will appear after the first signed release is published.
+
 ## What Forma does
 
 - **Ask and Learn conversations** with Quick, Guided, and Deep teaching depth.
@@ -52,7 +56,7 @@ Read the [product and technical brief](AI_Tutor_Harness_Product_and_Technical_Br
 | Desktop app | Electron with a loopback-only local sidecar |
 | Tests | Pytest, ESLint, production web build |
 
-## Getting started
+## Development setup
 
 ### Prerequisites
 
@@ -133,7 +137,7 @@ web/         React workspace, UI components, and client-side API contracts
 
 ## Releases and installation
 
-End-user installation instructions are in [docs/INSTALL.md](docs/INSTALL.md). Release changes are tracked in [CHANGELOG.md](CHANGELOG.md), and maintainers should follow the [release runbook](docs/RELEASING.md).
+Use the **Download Open Learn** button above to find desktop installers. Release changes are tracked in [CHANGELOG.md](CHANGELOG.md), and maintainers should follow the [release runbook](docs/RELEASING.md).
 
 ## Contributing
 

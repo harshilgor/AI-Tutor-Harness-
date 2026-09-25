@@ -1,6 +1,6 @@
 # Installing Forma Desktop
 
-The desktop installer is published from the repository's GitHub Releases page. Download the installer for your operating system from the release marked **Latest** and read the matching entry in [the changelog](../CHANGELOG.md).
+Select **Download Open Learn** in the [project README](../README.md), or open the [GitHub Releases page](https://github.com/harshilgor/Open-Learn/releases). Choose the newest published release that includes installers, then download the file for your operating system. Beta versions may be marked **Pre-release**. Installer downloads will appear after the first signed release is published.
 
 ## Windows
 
